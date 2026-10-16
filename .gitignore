@@ -1,0 +1,8 @@
+/runtime/
+/publish/
+/dist/
+*.local.json
+*.dat
+*.tar
+*.tar.gz
+.DS_Store

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "source": {"repository": "Loyalsoldier/v2ray-rules-dat", "tag": "latest"},
+  "baseline": "/config/baseline.json",
+  "client": {"name": "Home network", "drop_inbound_rules": true, "keep_outbounds": []},
+  "sites": {
+    "geosite_cn.txt": "cn",
+    "geosite_apple-cn.txt": "apple-cn",
+    "geosite_google-cn.txt": "google-cn",
+    "geosite_gfw.txt": "gfw",
+    "geosite_geolocation-!cn.txt": "geolocation-!cn"
+  },
+  "ips": {"geoip_cn.txt": "cn", "geoip_private.txt": "private"},
+  "routeros_candidate": true,
+  "publish_dir": "/publish",
+  "budget_bytes": 167772160,
+  "min_free_bytes": 67108864,
+  "max_asset_bytes": 41943040,
+  "timeout_seconds": 300
+}

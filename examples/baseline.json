@@ -1,0 +1,20 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [],
+  "dns": {"servers": ["1.1.1.1"]},
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "proxy", "protocol": "socks", "settings": {"servers": [{"address": "proxy.example.invalid", "port": 1080}]}},
+    {"tag": "block", "protocol": "blackhole"}
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {"type": "field", "domain": ["geosite:cn"], "outboundTag": "direct"},
+      {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+      {"type": "field", "domain": ["geosite:geolocation-!cn"], "outboundTag": "proxy"},
+      {"type": "field", "ip": ["geoip:!cn"], "outboundTag": "proxy"},
+      {"type": "field", "ip": ["geoip:cn"], "outboundTag": "direct"}
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+.git
+runtime
+publish
+dist
+*.local.json
+**/*.dat
+**/*.tar*
