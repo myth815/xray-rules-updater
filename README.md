@@ -61,6 +61,18 @@ host should compare the old/new `status.json.run_id`, require a new successful
 status (`published`/`unchanged`), and separately verify consumer application.
 `stopped` or a previous success file alone is not success for a new run.
 
+For an offline RouterOS import, a recent containerd-backed `docker save` may
+include an OCI index that RouterOS 7.23 cannot extract. The build-only helper
+converts that outer archive into classic Docker-save format, checking each
+uncompressed layer against the original config's `diff_ids`; it does not change
+the executable or layer contents and is not included in the runtime image.
+
+```sh
+docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.1.1
+docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.1.1
+python3 tools/docker_save_for_routeros.py image.tar image-routeros.tar
+```
+
 If downloads need a proxy, supply `HTTPS_PROXY` only to this task's environment;
 the publisher honors Go's standard proxy environment variables. It never changes
 system proxy, DNS or routing. For reproducibility replace `source.tag: latest`
