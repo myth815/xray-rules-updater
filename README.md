@@ -445,7 +445,11 @@ client selection are distinct states; none alone proves the others.
   using OneXray's existing asset shape. Names contain the full content SHA256;
   the patched app must derive that expected digest and verify actual bytes on
   download, reuse and every refresh path. `manifest.client_assets` also retains
-  explicit SHA256 values. URLs point to the original
+  explicit SHA256 values. This opt-in contract accepts at most 64 MiB per DAT
+  and 128 MiB per dependency batch; incompatible provider publications fail
+  before publication rather than asking the client to install oversized assets.
+  These client limits do not change the default-off or manual-transfer paths.
+  URLs point to the original
   `/versions/<policy-version>/geoip.dat` or `geosite.dat`. No DAT copies are made.
   Before enabling this flag, install the restricted versioned-DAT serving
   include and validate these URLs as described in [deployment](deploy/README.md);

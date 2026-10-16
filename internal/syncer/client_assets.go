@@ -20,6 +20,23 @@ type ClientAsset struct {
 	Bytes  int64  `json:"bytes"`
 }
 
+// The opt-in provider adapter bounds a DAT to 64 MiB and one import to
+// 128 MiB. Refuse an incompatible publication rather than advertising a
+// configuration whose dependencies the client cannot install.
+const providerGeoFileBytes int64 = 64 << 20
+const providerGeoBatchBytes int64 = 128 << 20
+
+func validateProviderGeoAssetBudget(assets map[string]ClientAsset) error {
+	var total int64
+	for _, asset := range assets {
+		if asset.Bytes < 1 || asset.Bytes > providerGeoFileBytes || asset.Bytes > providerGeoBatchBytes-total {
+			return errors.New("provider GEO dependencies exceed client download limits")
+		}
+		total += asset.Bytes
+	}
+	return nil
+}
+
 // Current OneXray can transactionally import raw config + linked DATs from one
 // text/file transfer. This is an initial-import bundle, not a subscription: the
 // app currently rejects duplicate custom DAT names. A config-only link is also
@@ -89,6 +106,9 @@ func bindClientAssets(c Config, v string, ip, site, raw []byte) ([]byte, map[str
 			if referenced[asset.Name] != asset.Type {
 				delete(assets, key)
 			}
+		}
+		if e = validateProviderGeoAssetBudget(assets); e != nil {
+			return nil, nil, nil, e
 		}
 		one, e = attachProviderGeoMetadata(one, assets)
 		if e != nil {
