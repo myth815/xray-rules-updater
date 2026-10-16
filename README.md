@@ -284,15 +284,16 @@ FakeDNS protocol and pool block guards, then ordinary `tunIn` dispatch. Other
 client and baseline rules keep their relative order. AI non-A/AAAA questions
 receive an empty successful answer before the DNS outbound's ordinary direct
 rule; this also suppresses AI HTTPS/SVCB hints and has a compatibility cost.
-Ordinary DNS questions and the baseline default outbound remain unchanged.
+Ordinary DNS servers and fallback order are retained, as is the baseline
+default outbound.
 Selecting an outbound tag does not prove its geographic exit; verify that
 separately. This feature does not send unknown traffic to a universal US exit.
 
 The generated `tunIn` recovers FakeDNS metadata without payload sniffing. An
 ordinary flow takes one additional dispatch inside the same Core through a
 generated loopback outbound, which performs the usual HTTP/TLS/QUIC sniffing.
-It creates no extra container or external listener. Performance has not been
-measured. Native loopback disables routing/handler DNS resolution on its second
+It creates no extra container or external listener. Target-device performance
+has not been measured. Native loopback disables routing/handler DNS resolution on its second
 pass, so `IPIfNonMatch` requires an existing unconditional TCP/UDP catchall;
 `AsIs` is supported, and `IPOnDemand` is rejected. Every retained outbound's
 `targetStrategy` must be absent, empty or `AsIs`. Transport socket and freedom

@@ -81,8 +81,10 @@
     :global RUXReadJSON; :global RUXContainer;
     :local c $1; :local command $2; :local statusFile $3;
     :local workerName ($c->"updater"); :local id [$RUXContainer $workerName];
-    :local row [:pick [/container print as-value where name=$workerName] 0];
-    :if (($row->"running") = true) do={ :error "rules updater is already running"; }
+    :local rows [/container print as-value where name=$workerName];
+    :if ([:len $rows] != 1) do={ :error "rules worker identity changed"; }
+    :local row [:pick $rows 0];
+    :if ((($row->".id") != $id) || (($row->"stopped") != true)) do={ :error "rules updater is not positively stopped"; }
     :local old [$RUXReadJSON $statusFile (false)]; :local oldRun "";
     :if ([:typeof $old] = "array") do={ :set oldRun ($old->"run_id"); }
     # Native verification includes the target Xray/MosDNS children in this
@@ -96,10 +98,13 @@
     :for wait from=0 to=(($c->"task_seconds") * 2) do={
         :delay 500ms;
         :local state [$RUXReadJSON $statusFile (false)];
-        :local now [:pick [/container print as-value where name=$workerName] 0];
+        :local currentRows [/container print as-value where name=$workerName];
+        :if ([:len $currentRows] != 1) do={ :error "rules worker identity changed"; }
+        :local now [:pick $currentRows 0];
+        :if (($now->".id") != $id) do={ :error "rules worker identity changed"; }
         :if ([:typeof $state] = "array") do={
             :local newRun ($state->"run_id");
-            :if (([:typeof $newRun] = "str") && ($newRun ~ "^[a-f0-9]{16}\$") && ($newRun != $oldRun) && (($now->"running") != true)) do={ :return $state; }
+            :if (([:typeof $newRun] = "str") && ($newRun ~ "^[a-f0-9]{16}\$") && ($newRun != $oldRun) && (($now->"stopped") = true)) do={ :return $state; }
         }
     }
     /container stop $id;
@@ -110,18 +115,25 @@
     :local consumerName $1; :local id [$RUXContainer $consumerName];
     /container stop $id;
     :for wait from=0 to=60 do={
-        :local row [:pick [/container print as-value where name=$consumerName] 0];
-        :if (($row->"running") != true) do={ :return; }
+        :local rows [/container print as-value where name=$consumerName];
+        :if ([:len $rows] != 1) do={ :error "rules consumer identity changed while stopping"; }
+        :local row [:pick $rows 0];
+        :if (($row->".id") != $id) do={ :error "rules consumer identity changed while stopping"; }
+        :if (($row->"stopped") = true) do={ :return true; }
         :delay 500ms;
     }
     :error "rules consumer did not stop";
 }
 :global RUXStart do={
     :global RUXContainer;
-    :local consumerName $1; /container start [$RUXContainer $consumerName];
+    :local consumerName $1; :local id [$RUXContainer $consumerName];
+    /container start $id;
     :for wait from=0 to=60 do={
-        :local row [:pick [/container print as-value where name=$consumerName] 0];
-        :if (($row->"running") = true) do={ :return; }
+        :local rows [/container print as-value where name=$consumerName];
+        :if ([:len $rows] != 1) do={ :error "rules consumer identity changed while starting"; }
+        :local row [:pick $rows 0];
+        :if (($row->".id") != $id) do={ :error "rules consumer identity changed while starting"; }
+        :if (($row->"running") = true) do={ :return true; }
         :delay 500ms;
     }
     :error "rules consumer did not start";
@@ -131,7 +143,7 @@
     :if ([:typeof $present] != "bool") do={ :error "rules asset presence flag must be boolean"; }
     :local ids [/container envs find where list=$listName and key="XRAY_LOCATION_ASSET"];
     :if ([:len $ids] > 1) do={ :error "rules asset environment is ambiguous"; }
-    :if (!$present) do={ /container envs remove $ids; :return; }
+    :if (!$present) do={ /container envs remove $ids; :return true; }
     :if ([:len $ids] = 0) do={
         /container envs add list=$listName key="XRAY_LOCATION_ASSET" value=$assetPath;
     } else={ /container envs set [:pick $ids 0] value=$assetPath; }
