@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/myth815/xray-rules-updater/internal/hostcontrol"
 	"github.com/myth815/xray-rules-updater/internal/syncer"
 	"github.com/myth815/xray-rules-updater/internal/verify"
 	"os"
@@ -23,6 +24,8 @@ func main() {
 	configPath := flag.String("config", "/config/config.json", "configuration file")
 	verifyPath := flag.String("verify-config", "", "native verification configuration file")
 	healthPath := flag.String("health-config", "", "live consumer health configuration file")
+	hostPath := flag.String("host-control-config", "", "host-only durable transaction configuration")
+	hostRequest := flag.String("host-request-id", "", "expected host request nonce")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -31,6 +34,28 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if *hostPath != "" {
+		if *verifyPath != "" || *healthPath != "" {
+			fail("host control cannot share another task mode")
+		}
+		body, err := os.ReadFile(*hostPath)
+		if err != nil {
+			fail("host configuration read failed")
+		}
+		config, err := hostcontrol.LoadConfig(body)
+		if err != nil {
+			fail("host configuration invalid")
+		}
+		summary, err := hostcontrol.Run(ctx, config, *hostRequest)
+		_ = json.NewEncoder(os.Stdout).Encode(summary)
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if *hostRequest != "" {
+		fail("host request requires host control mode")
+	}
 	if *healthPath != "" {
 		body, err := os.ReadFile(*healthPath)
 		if err != nil {

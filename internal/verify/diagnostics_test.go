@@ -101,8 +101,10 @@ func TestNativeTimeoutRecordsPhaseAndReapsBeforeDiagnostics(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(native, "01.json"), []byte(`{"outbounds":[]}`), 0600); e != nil {
 		t.Fatal(e)
 	}
-	s, e := Run(context.Background(), Config{PublishDir: root, XrayBinary: x, XrayConfigDir: native, MosDNSBinary: "/bin/sh", MosDNSConfigDir: native, DiagnosticDir: diagnostics, TimeoutSeconds: 1})
-	if e != failure("verify_timeout") || s.Phase != "xray_run_test" || s.PhaseDurationsMS["xray_run_test"] < 800 {
+	// Allow macOS process startup under -race to reach the first printf before
+	// the fixture deadline; a one-second limit can expire before the shell runs.
+	s, e := Run(context.Background(), Config{PublishDir: root, XrayBinary: x, XrayConfigDir: native, MosDNSBinary: "/bin/sh", MosDNSConfigDir: native, DiagnosticDir: diagnostics, TimeoutSeconds: 3})
+	if e != failure("verify_timeout") || s.Phase != "xray_run_test" || s.PhaseDurationsMS["xray_run_test"] < 2800 {
 		t.Fatalf("timeout diagnostics: %+v %v", s, e)
 	}
 	b, e := os.ReadFile(filepath.Join(diagnostics, "last-xray.log"))

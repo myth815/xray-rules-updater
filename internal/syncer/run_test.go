@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/myth815/xray-rules-updater/internal/client"
 	"os"
 	"path/filepath"
@@ -124,6 +125,74 @@ func TestFailurePreservesCurrent(t *testing.T) {
 			assertCurrent(t, c, a.Version)
 		})
 	}
+}
+
+func TestOrdinaryExportBudgetRefusalPreservesCurrent(t *testing.T) {
+	c := fixture(t)
+	first, err := Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := pb(1, []byte("cn"))
+	for i := 0; i < 2000; i++ {
+		value := fmt.Sprintf("%s%08d.example", strings.Repeat("a", 50), i)
+		domain := append([]byte{8, 2}, pb(2, []byte(value))...)
+		entry = append(entry, pb(2, domain)...)
+	}
+	site := pb(1, entry)
+	if err := os.WriteFile(c.Source.GeoSite.Path, site, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.Source.GeoSite.SHA256, c.Source.GeoSite.Size = hash(site), int64(len(site))
+	c.BudgetBytes, c.MaxAssetBytes = 1<<20, 256<<10
+	c.RouterOSCandidate, c.IPs = false, nil
+	c.Sites = map[string]string{}
+	for i := 0; i < 8; i++ {
+		c.Sites[fmt.Sprintf("cn-%02d.txt", i)] = "cn"
+	}
+	failed, err := Run(context.Background(), c)
+	if err == nil || failed.ErrorCode != "capacity" {
+		t.Fatalf("ordinary export limit did not fail as resource admission: %+v %v", failed, err)
+	}
+	assertCurrent(t, c, first.Version)
+	entries, err := os.ReadDir(filepath.Join(c.PublishDir, "versions"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("refused export left another version: %v %v", entries, err)
+	}
+}
+
+func TestOrdinaryExportAdmissionIncludesRetainedRootBytes(t *testing.T) {
+	c := fixture(t)
+	first, err := Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unknown retained bytes are intentionally not pruned by the publisher, but
+	// must still reduce the candidate's construction budget.
+	if err := os.WriteFile(filepath.Join(c.PublishDir, "retained-fixture"), make([]byte, 512<<10), 0600); err != nil {
+		t.Fatal(err)
+	}
+	entry := pb(1, []byte("cn"))
+	for i := 0; i < 2000; i++ {
+		value := fmt.Sprintf("%s%08d.example", strings.Repeat("a", 50), i)
+		entry = append(entry, pb(2, append([]byte{8, 2}, pb(2, []byte(value))...))...)
+	}
+	site := pb(1, entry)
+	if err := os.WriteFile(c.Source.GeoSite.Path, site, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.Source.GeoSite.SHA256, c.Source.GeoSite.Size = hash(site), int64(len(site))
+	c.BudgetBytes, c.MaxAssetBytes = 1<<20, 256<<10
+	c.RouterOSCandidate, c.IPs = false, nil
+	c.Sites = map[string]string{}
+	for i := 0; i < 5; i++ {
+		c.Sites[fmt.Sprintf("cn-%02d.txt", i)] = "cn"
+	}
+	failed, err := Run(context.Background(), c)
+	if err == nil || failed.ErrorCode != "capacity" || !strings.Contains(err.Error(), "export size limit") {
+		t.Fatalf("retained bytes were not deducted before export materialization: %+v %v", failed, err)
+	}
+	assertCurrent(t, c, first.Version)
 }
 func TestLockReleaseAndInterruptedStageCleanup(t *testing.T) {
 	c := fixture(t)

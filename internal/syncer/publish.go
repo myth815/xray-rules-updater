@@ -17,16 +17,17 @@ type FileInfo struct {
 	Bytes  int64  `json:"bytes"`
 }
 type Manifest struct {
-	SchemaVersion    int                 `json:"schema_version"`
-	GeneratorVersion string              `json:"generator_version"`
-	Version          string              `json:"version"`
-	CreatedAt        string              `json:"created_at"`
-	Release          string              `json:"geo_release"`
-	BaselineSHA256   string              `json:"baseline_sha256"`
-	PolicySHA256     string              `json:"policy_sha256"`
-	Files            map[string]FileInfo `json:"files"`
-	Counts           map[string]int      `json:"counts"`
-	Activation       string              `json:"activation"`
+	SchemaVersion    int                    `json:"schema_version"`
+	GeneratorVersion string                 `json:"generator_version"`
+	Version          string                 `json:"version"`
+	CreatedAt        string                 `json:"created_at"`
+	Release          string                 `json:"geo_release"`
+	BaselineSHA256   string                 `json:"baseline_sha256"`
+	PolicySHA256     string                 `json:"policy_sha256"`
+	Files            map[string]FileInfo    `json:"files"`
+	Counts           map[string]int         `json:"counts"`
+	Activation       string                 `json:"activation"`
+	ClientAssets     map[string]ClientAsset `json:"client_assets,omitempty"`
 }
 
 func freeBytes(root string) (int64, error) {

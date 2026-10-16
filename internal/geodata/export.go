@@ -4,6 +4,7 @@
 package geodata
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"path"
@@ -39,6 +40,32 @@ type domain struct {
 var token = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var categoryToken = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_!.-]*$`)
 
+// ErrExportLimit reports rejection before an output grows beyond its file or
+// aggregate budget. Callers may distinguish resource admission from bad data.
+var ErrExportLimit = errors.New("export exceeds file or publication size limit")
+
+type exportBudget struct {
+	maxFile, maxTotal, total int64
+}
+
+func (b *exportBudget) add(fileSize, bytes int64) error {
+	if bytes < 0 || fileSize > b.maxFile-bytes || b.total > b.maxTotal-bytes {
+		return ErrExportLimit
+	}
+	b.total += bytes
+	return nil
+}
+
+// MosDNS strips # comments before parsing domain-set lines. Escaping a regexp
+// cannot preserve that earlier text transformation, so reject rather than widen
+// a matcher. Native DAT parsing remains independent of this text-only guard.
+func validMosDNSDomainLine(line string) error {
+	if strings.ContainsRune(line, '#') {
+		return fmt.Errorf("domain matcher contains an unrepresentable MosDNS comment delimiter")
+	}
+	return nil
+}
+
 // Export maps output relative filenames to DAT selectors. GeoSite selectors
 // support code@attribute@attribute (AND). As in Xray v26.3.27's
 // infra/conf/router.go BooleanMatcher, matching checks attribute key presence,
@@ -46,6 +73,16 @@ var categoryToken = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_!.-]*$`)
 // A present category with no matching attributes produces an empty file;
 // callers decide whether that empty result is acceptable for their policy.
 func Export(geoip, geosite []byte, sites map[string]string, ips map[string]string, routerList string) (*Result, error) {
+	return ExportBounded(geoip, geosite, sites, ips, routerList, 128<<20, 128<<20)
+}
+
+// ExportBounded charges selected output lines before inserting or materializing
+// them. Every MosDNS file and the optional RouterOS candidate share one budget.
+func ExportBounded(geoip, geosite []byte, sites map[string]string, ips map[string]string, routerList string, maxFileBytes, maxTotalBytes int64) (*Result, error) {
+	if maxFileBytes < 1 || maxFileBytes > 128<<20 || maxTotalBytes < 1 || len(sites)+len(ips) > 128 {
+		return nil, fmt.Errorf("invalid export limits")
+	}
+	budget := exportBudget{maxFile: maxFileBytes, maxTotal: maxTotalBytes}
 	r := &Result{Files: map[string][]byte{}, Counts: map[string]int{}}
 	siteSelectors, ipSelectors := map[string]selector{}, map[string]selector{}
 	wantedSites, wantedIPs := map[string]bool{}, map[string]bool{}
@@ -101,10 +138,21 @@ func Export(geoip, geosite []byte, sites map[string]string, ips map[string]strin
 	}
 	for filename, s := range siteSelectors {
 		unique := map[string]bool{}
+		var size int64
 		for _, d := range siteData[s.code] {
 			if matchesAttrs(d.attrs, s.attrs) {
 				prefix := [...]string{"keyword:", "regexp:", "domain:", "full:"}[d.kind]
-				unique[prefix+d.value] = true
+				line := prefix + d.value
+				if err := validMosDNSDomainLine(line); err != nil {
+					return nil, err
+				}
+				if !unique[line] {
+					n := int64(len(line)) + 1
+					if err := budget.add(size, n); err != nil {
+						return nil, err
+					}
+					unique[line], size = true, size+n
+				}
 			}
 		}
 		lines := make([]string, 0, len(unique))
@@ -116,35 +164,58 @@ func Export(geoip, geosite []byte, sites map[string]string, ips map[string]strin
 	}
 	for filename, s := range ipSelectors {
 		prefixes := ipData[s.code]
-		lines := make([]string, 0, len(prefixes))
+		var lines []string
+		var size int64
 		for _, p := range prefixes {
-			lines = append(lines, p.String())
+			line := p.String()
+			n := int64(len(line)) + 1
+			if err := budget.add(size, n); err != nil {
+				return nil, err
+			}
+			lines, size = append(lines, line), size+n
 		}
 		r.Files[filename], r.Counts[filename] = textLines(lines), len(lines)
 	}
 	if routerList != "" {
 		cn := ipData["cn"]
-		var v4 []netip.Prefix
+		v4Count := 0
 		for _, p := range cn {
 			if p.Addr().Is4() {
 				if p.Bits() < 8 {
 					return nil, fmt.Errorf("CN IPv4 prefix %s is too broad", p)
 				}
-				v4 = append(v4, p)
+				v4Count++
 			}
 		}
-		if len(v4) == 0 {
+		if v4Count == 0 {
 			return nil, fmt.Errorf("CN IPv4 candidate is empty")
 		}
 		var b strings.Builder
-		b.WriteString("# Candidate address data only; no routing rules are enabled.\n")
-		fmt.Fprintf(&b, ":if ([:len [/ip firewall address-list find where list=\"%s\"]] > 0) do={:error \"Candidate list already exists\"}\n", routerList)
-		b.WriteString("/ip firewall address-list\n")
-		for _, p := range v4 {
-			fmt.Fprintf(&b, "add list=%s address=%s comment=\"xray-rules-updater candidate\"\n", routerList, p)
+		add := func(line string) error {
+			if err := budget.add(int64(b.Len()), int64(len(line))); err != nil {
+				return err
+			}
+			b.WriteString(line)
+			return nil
+		}
+		for _, line := range []string{
+			"# Candidate address data only; no routing rules are enabled.\n",
+			fmt.Sprintf(":if ([:len [/ip firewall address-list find where list=\"%s\"]] > 0) do={:error \"Candidate list already exists\"}\n", routerList),
+			"/ip firewall address-list\n",
+		} {
+			if err := add(line); err != nil {
+				return nil, err
+			}
+		}
+		for _, p := range cn {
+			if p.Addr().Is4() {
+				if err := add(fmt.Sprintf("add list=%s address=%s comment=\"xray-rules-updater candidate\"\n", routerList, p)); err != nil {
+					return nil, err
+				}
+			}
 		}
 		r.Files["routeros-cn-v4.rsc"] = []byte(b.String())
-		r.Counts["routeros-cn-v4.rsc"] = len(v4)
+		r.Counts["routeros-cn-v4.rsc"] = v4Count
 	}
 	return r, nil
 }

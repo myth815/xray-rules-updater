@@ -61,7 +61,7 @@ and complete coherent baseline edits before scheduling generation.
 docker run --rm --memory=192m --cpus=1 \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/publish:/publish" \
-  ghcr.io/myth815/xray-rules-updater:v0.4.2
+  ghcr.io/myth815/xray-rules-updater:v0.5.0
 ```
 
 Mount the publication into an existing Nginx instance read-only. Immutable
@@ -94,8 +94,8 @@ uncompressed layer against the original config's `diff_ids`; it does not change
 the executable or layer contents and is not included in the runtime image.
 
 ```sh
-docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.4.2
-docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.4.2
+docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.5.0
+docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.5.0
 python3 tools/docker_save_for_routeros.py image.tar image-routeros.tar
 ```
 
@@ -425,6 +425,19 @@ client selection are distinct states; none alone proves the others.
 - OneXray full-config refresh and GEO updates are separate. In the validated
   client release, refresh inserts a new entry; selecting it and reconnecting are
   still client actions. The publisher does not claim an atomic client update.
+  Optional `one_xray_versioned_geo: true` with an HTTPS origin in
+  `client_asset_base_url` binds native selectors to custom DAT filenames containing
+  the complete content SHA256. `manifest.json` records immutable URLs and hashes;
+  the router stores only the two original DATs. Missing files fail native
+  validation instead of falling back to the app's standard GEO files.
+  `onexray-import.txt` is an initial three-line manual transfer containing the
+  complete raw config and two DAT links. Download/import the text file or use
+  the clipboard; an HTTPS text URL alone is treated as a subscription by the app.
+  Current OneXray rejects a duplicate custom DAT filename, even when unchanged.
+  Use `onexray-config.txt` only when both exact DATs are already installed, or
+  import the missing DAT links from `onexray-geodata.txt` before refreshing the
+  full JSON. Automatic subscription dependency installation requires an upstream
+  app change and is not implemented by publishing these files.
 - The storage budget counts retained publications plus the candidate; free-space
   reserve is additional. Defaults: 160 MiB publication budget, 64 MiB disk reserve,
   40 MiB per DAT, 300 seconds. Go CPU parallelism is limited to one, with a 96 MiB

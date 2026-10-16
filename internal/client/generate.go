@@ -147,7 +147,11 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 			return nil, err
 		}
 	}
-	balancers, err := readBalancers(routing["balancers"], outs, byTag)
+	extraTags := make(map[string]bool, len(overlay.ExtraOutbounds))
+	for _, out := range outs[len(outs)-len(overlay.ExtraOutbounds):] {
+		extraTags[out.tag] = true
+	}
+	balancers, err := readBalancers(routing["balancers"], outs, byTag, extraTags)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +583,7 @@ func validateDependencyGraph(outs []outbound, byTag map[string]outbound) error {
 	return nil
 }
 
-func readBalancers(raw json.RawMessage, outs []outbound, byTag map[string]outbound) (map[string]balancer, error) {
+func readBalancers(raw json.RawMessage, outs []outbound, byTag map[string]outbound, extraTags map[string]bool) (map[string]balancer, error) {
 	result := map[string]balancer{}
 	if len(raw) == 0 {
 		return result, nil
@@ -617,6 +621,12 @@ func readBalancers(raw json.RawMessage, outs []outbound, byTag map[string]outbou
 			matched := false
 			for _, out := range outs {
 				if strings.HasPrefix(out.tag, prefix) {
+					// Appending a client identity must not silently expand an
+					// authoritative baseline pool, even when keep_outbounds
+					// would otherwise omit that identity.
+					if extraTags[out.tag] {
+						return nil, fmt.Errorf("%s: extra outbound would expand a baseline balancer selector; change the authoritative baseline or extra tag explicitly", where)
+					}
 					matched = true
 					b.deps = append(b.deps, out.tag)
 				}

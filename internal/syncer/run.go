@@ -90,11 +90,13 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		return summary, errors.New("baseline domain policy validation failed")
 	}
 	policy, _ := json.Marshal(struct {
-		Client     client.Overlay
-		Sites, IPs map[string]string
-		RouterOS   bool
-		DomainSets map[string]string
-	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds})
+		Client       client.Overlay
+		Sites, IPs   map[string]string
+		RouterOS     bool
+		DomainSets   map[string]string
+		VersionedGEO bool
+		AssetBaseURL string
+	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds, c.OneXrayVersionedGEO, c.ClientAssetBaseURL})
 	policyHash := hash(policy)
 	identity, _ := json.Marshal([]string{"format-v1", c.GeneratorVersion, source.ReleaseID, strings.ToLower(source.GeoIP.SHA256), strings.ToLower(source.GeoSite.SHA256), baselineHash, policyHash})
 	// Keep IDs short enough for RouterOS list names as well as immutable paths.
@@ -141,8 +143,21 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	if c.RouterOSCandidate {
 		list = "XrayCN_" + version
 	}
-	derived, e := geodata.Export(ip, site, c.Sites, c.IPs, list)
+	used, e := usedBytes(c.PublishDir)
 	if e != nil {
+		return summary, errors.New("storage inspection failed")
+	}
+	// Retained versions and the publisher's fixed write allowance also consume
+	// admission space; do not construct outputs against the whole root budget.
+	remaining := c.BudgetBytes - used - int64(len(ip)) - int64(len(site)) - (64 << 10)
+	if remaining < 1 {
+		return summary, errors.New("storage budget exhausted by DAT assets")
+	}
+	derived, e := geodata.ExportBounded(ip, site, c.Sites, c.IPs, list, c.MaxAssetBytes, remaining)
+	if e != nil {
+		if errors.Is(e, geodata.ErrExportLimit) {
+			return summary, errors.New("storage budget or export size limit exhausted")
+		}
 		return summary, errors.New("DAT export validation failed")
 	}
 	if len(c.DomainSetsFromOutbounds) != 0 {
@@ -150,12 +165,17 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		for filename, target := range c.DomainSetsFromOutbounds {
 			exports[filename] = domainSets[target]
 		}
-		remaining := c.BudgetBytes - int64(len(ip)) - int64(len(site))
 		for _, data := range derived.Files {
 			remaining -= int64(len(data))
 		}
+		if remaining < 1 {
+			return summary, errors.New("storage budget exhausted before domain exports")
+		}
 		domains, err := geodata.ExportDomainSetsBounded(site, exports, c.MaxAssetBytes, remaining)
 		if err != nil {
+			if errors.Is(err, geodata.ErrExportLimit) {
+				return summary, errors.New("storage budget or domain export size limit exhausted")
+			}
 			return summary, errors.New("DAT export domain policy validation failed")
 		}
 		for name, data := range domains.Files {
@@ -198,6 +218,12 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	if e = geodata.ValidateReferences(ip, site, refs); e != nil {
 		return summary, errors.New("client GEO dependency validation failed")
 	}
+	// Check the original native categories before binding them to immutable,
+	// content-addressed app filenames. No DAT is expanded or duplicated.
+	one, clientAssets, geoLinks, e := bindClientAssets(c, version, ip, site, one)
+	if e != nil {
+		return summary, errors.New("client adaptation GEO asset binding failed")
+	}
 	// OneXray uses name as subscription metadata; core routing stays unchanged.
 	var entry map[string]json.RawMessage
 	_ = json.Unmarshal(one, &entry)
@@ -220,10 +246,28 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	files["geoip.dat"] = ip
 	files["geosite.dat"] = site
 	files["onexray.json"] = one
+	if len(geoLinks) != 0 {
+		files["onexray-geodata.txt"] = geoLinks
+		var existing int64
+		for _, data := range files {
+			existing += int64(len(data))
+		}
+		available := c.BudgetBytes - used - (64 << 10) - existing
+		limit := available / 2
+		if limit > c.MaxAssetBytes {
+			limit = c.MaxAssetBytes
+		}
+		single, bundle, err := clientTransfer(one, geoLinks, version, limit)
+		if err != nil {
+			return summary, err
+		}
+		files["onexray-config.txt"], files["onexray-import.txt"] = single, bundle
+	}
 	if e = ctx.Err(); e != nil {
 		return summary, errors.New("run deadline exceeded")
 	}
 	manifest := Manifest{GeneratorVersion: c.GeneratorVersion, Release: source.ReleaseID, BaselineSHA256: baselineHash, PolicySHA256: policyHash, Counts: derived.Counts, Activation: "published only; no consumer configuration or routing changes"}
+	manifest.ClientAssets = clientAssets
 	changed, e := publish(c, summary.RunID, version, files, manifest)
 	if e != nil {
 		if changed {

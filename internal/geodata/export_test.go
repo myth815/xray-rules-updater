@@ -3,12 +3,81 @@ package geodata
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestExportBoundedCountsEveryOutputAndDeduplicates(t *testing.T) {
+	sites := category("cn", domainMessage(2, "example.org"), domainMessage(2, "example.org"))
+	ips := category("cn", cidrMessage("1.2.0.0/25"), cidrMessage("1.2.0.128/25"))
+	selectedSites := map[string]string{"a.txt": "cn", "b.txt": "cn"}
+	selectedIPs := map[string]string{"ip.txt": "cn"}
+	want, err := Export(ips, sites, selectedSites, selectedIPs, "CandidateCN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total, largest int64
+	for _, body := range want.Files {
+		n := int64(len(body))
+		total += n
+		if n > largest {
+			largest = n
+		}
+	}
+	got, err := ExportBounded(ips, sites, selectedSites, selectedIPs, "CandidateCN", largest, total)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("exact byte budget changed output or charged duplicates: %v %v", got, err)
+	}
+	for _, limits := range [][2]int64{{largest - 1, total}, {largest, total - 1}} {
+		got, err := ExportBounded(ips, sites, selectedSites, selectedIPs, "CandidateCN", limits[0], limits[1])
+		if got != nil || !errors.Is(err, ErrExportLimit) {
+			t.Fatalf("per-file/aggregate budget not enforced across MosDNS and RouterOS: %v %v", got, err)
+		}
+	}
+}
+
+func TestExportBoundedRefusesOrdinaryExportAmplification(t *testing.T) {
+	var domains [][]byte
+	for i := 0; i < 2000; i++ {
+		domains = append(domains, domainMessage(2, fmt.Sprintf("%s%08d.example", strings.Repeat("a", 50), i)))
+	}
+	sites := category("cn", domains...)
+	selected := map[string]string{}
+	for i := 0; i < 32; i++ {
+		selected[fmt.Sprintf("cn-%02d.txt", i)] = "cn"
+	}
+	if got, err := ExportBounded(nil, sites, selected, nil, "", 256<<10, 1<<20); got != nil || !errors.Is(err, ErrExportLimit) {
+		t.Fatalf("amplified ordinary exports escaped the aggregate limit: %v %v", got, err)
+	}
+}
+
+func TestMosDNSExportRejectsCommentDelimiterWithoutChangingNativeDAT(t *testing.T) {
+	for kind := uint64(0); kind <= 3; kind++ {
+		for _, value := range []string{"api#tail.example", `^api\#tail\.example$`, `^api[#]tail\.example$`} {
+			t.Run(fmt.Sprintf("kind-%d-%s", kind, value), func(t *testing.T) {
+				data := category("cn", domainMessage(kind, value), domainMessage(2, "safe.example", boolAttr("safe", true)))
+				original := append([]byte(nil), data...)
+				if err := ValidateReferences(nil, data, []string{"geosite:cn"}); err != nil {
+					t.Fatal("native GEO reference was incorrectly rejected", err)
+				}
+				if got, err := Export(nil, data, map[string]string{"cn.txt": "cn"}, nil, ""); err == nil || got != nil {
+					t.Fatalf("MosDNS would truncate a selected matcher: %v %v", got, err)
+				}
+				got, err := Export(nil, data, map[string]string{"safe.txt": "cn@safe"}, nil, "")
+				if err != nil || string(got.Files["safe.txt"]) != "domain:safe.example\n" {
+					t.Fatalf("unselected native matcher affected a safe export: %v %v", got, err)
+				}
+				if !bytes.Equal(original, data) {
+					t.Fatal("native DAT was rewritten")
+				}
+			})
+		}
+	}
+}
 
 func varField(number, value uint64) []byte {
 	b := binary.AppendUvarint(nil, number<<3)

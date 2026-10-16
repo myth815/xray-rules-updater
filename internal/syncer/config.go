@@ -34,6 +34,8 @@ type Config struct {
 	ApplyAckPath            string            `json:"apply_ack_path,omitempty"`
 	ApplyTransactionPath    string            `json:"apply_transaction_path,omitempty"`
 	Client                  client.Overlay    `json:"client"`
+	OneXrayVersionedGEO     bool              `json:"one_xray_versioned_geo,omitempty"`
+	ClientAssetBaseURL      string            `json:"client_asset_base_url,omitempty"`
 	Sites                   map[string]string `json:"sites"`
 	IPs                     map[string]string `json:"ips"`
 	DomainSetsFromOutbounds map[string]string `json:"domain_sets_from_outbounds,omitempty"`
@@ -93,6 +95,9 @@ func LoadConfig(data []byte, base string) (Config, error) {
 	return c, nil
 }
 func (c *Config) validate() error {
+	if err := validateClientAssetConfig(*c); err != nil {
+		return err
+	}
 	if c.ServeGroupID != nil && (*c.ServeGroupID < 0 || *c.ServeGroupID > 2147483647) {
 		return errors.New("invalid serve_group_id")
 	}
@@ -153,7 +158,7 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	reserved := map[string]bool{"geoip.dat": true, "geosite.dat": true, "onexray.json": true, "manifest.json": true, "status.json": true, "verification.json": true, "health.json": true, "routeros-cn-v4.rsc": true}
+	reserved := map[string]bool{"geoip.dat": true, "geosite.dat": true, "onexray.json": true, "onexray-geodata.txt": true, "onexray-import.txt": true, "onexray-config.txt": true, "manifest.json": true, "status.json": true, "verification.json": true, "health.json": true, "host-control.json": true, "routeros-cn-v4.rsc": true}
 	seen := map[string]bool{}
 	for _, m := range []map[string]string{c.Sites, c.IPs, c.DomainSetsFromOutbounds} {
 		for name, selector := range m {

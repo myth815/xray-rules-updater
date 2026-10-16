@@ -1,104 +1,202 @@
 # RouterOS host application
 
 These files are deployment building blocks. They do not install containers,
-change existing mounts, migrate production configurations, or enable a
-scheduler. Review the public sample values in `routeros/update.rsc` before use.
+change production mounts or enable schedulers. Review the public sample values
+in `routeros/update.rsc` and perform the controlled migration below first.
 
-## First deployment
+## First deployment and upgrades
 
-Bootstrap is a separate, controlled migration with an actual rollback snapshot.
-Complete and verify it before running the daily script:
+Bootstrap is a separate migration with an exact rollback snapshot. The daily
+controller requires an existing valid ACK and a concrete old publication version;
+it does not fabricate a previous version or migrate a legacy configuration.
 
 1. Mount the entire publication read-only at `/rules` in Xray, MosDNS and Nginx.
-   Mount private updater inputs at `/config`, writable publication output at
-   `/publish`, and host-owned acknowledgement/journal state at `/state`.
-2. Attach a dedicated Xray environment list as its only source of
-   `XRAY_LOCATION_ASSET`. Confirm which original asset path must be restored if
-   the first application fails.
-3. Migrate the **complete** MosDNS configuration to the reviewed, advertising-free
-   configuration. A replacement `dat_exec.yaml` cannot remove references from an
-   older main configuration. Provide a daily data template containing
-   `@@RULES_ASSET_DIR@@` and record the real production path in the script.
-4. Provide generation, native-verification and production-health inputs. Native
-   verification needs the target Xray/MosDNS binaries and complete configurations
-   mounted read-only. Health checks use the actual production DNS server and
-   explicit HTTP proxy.
-5. Set `require_apply_ack: true`, `apply_ack_path: "/state/applied.json"` and
-   `apply_transaction_path: "/state/transaction.json"`. Only the host writes
-   these two records. Keep them outside the read-only configuration inputs.
-6. Install the Nginx helper and stable locations, validate its configuration, and
-   check that RouterOS can read the small state files through their actual host
-   paths. Publish the first controlled `current` and enable its internal metadata
-   endpoint before the daily body runs. Install the RouterOS script under the
-   configured `script_name` and validate one manual run before enabling a scheduler.
+   Attach one dedicated Xray environment list as the only source of
+   `XRAY_LOCATION_ASSET`, initially `/rules/versions/<acknowledged-version>`.
+   Direct container environment entries must not override it.
+2. Migrate the **complete** MosDNS configuration to the reviewed configuration.
+   Replacing only `dat_exec.yaml` cannot remove old advertising-filter references.
+   Mount its complete configuration read-only at `/etc/mosdns`. Provide a data
+   template containing `@@RULES_ASSET_DIR@@`; the controller compares the complete
+   rendered data file, not just a matching version substring.
+3. Provide generation, native-verification and health inputs. Verification needs
+   the target Xray/MosDNS binaries and complete configurations mounted read-only.
+   Health uses the production DNS server and explicit HTTP proxy.
+4. Set `require_apply_ack: true`, `apply_ack_path: "/host-state/applied.json"`
+   and `apply_transaction_path: "/host-state/transaction.json"`. The ordinary
+   producer must mount host-owned state read-only. No publisher action writes it.
+5. Prepare **two complete mount-list sets for the same stopped updater**:
 
-`routeros/update.rsc` is the body of one named `/system script`; importing the
-body executes it immediately. A scheduler should invoke the named script. The
-body assumes the bootstrap mounts, environment attachment and complete MosDNS
-migration are already correct. It applies only a controlled publisher `current`
-version which passes native verification; it does not perform that initial
-migration or activate the generated RouterOS CN candidate list.
+   | Destination | Producer role | Host-control role |
+   | --- | --- | --- |
+   | `/config` | inputs, RO | same inputs, RO |
+   | `/publish` | publication, RW | same publication, RW |
+   | `/host-state` | ACK/journal directory, RO | same directory, RW |
+   | `/host-mosdns` | absent | complete MosDNS configuration directory, RW |
+   | `/host-nginx` | absent | Nginx managed control directory, RW |
+   | `/diagnostics` | exact `diagnostics_root`, RW | absent |
+   | verification binaries/configurations | RO as required | optional RO |
 
-RouterOS's file interface does not traverse the publisher's `current` symlink.
-The script reads only that manifest from `current_manifest_url` (sample:
-`http://172.28.55.5:8089/current-manifest`), served by an internal Nginx alias to
-`/rules/current/manifest.json`. Keep this metadata endpoint reachable only within
-the trusted management network. It is separate from the stable subscription's
-applied-version manifest. Status files, ACK and journal retain direct file reads.
-The daily body requires an existing current; HTTP, network and invalid-metadata
-errors abort the task rather than being treated as an empty initial publication.
+   Set `producer_mountlists` and `host_mountlists` to the actual attached list
+   names in their exact order. The host controller validates each controlled
+   source/destination/mode, forbids destination overrides and any extra RW mount. The explicit producer
+   diagnostic directory preserves native-verification diagnostics and must not
+   overlap publication, state, inputs, MosDNS or Nginx control directories.
+   Keep updater `start-on-boot=no`, with no legacy direct `mount` entry. Before
+   exposing host RW mounts it sets a non-authorizing host command; it restores
+   producer RO mounts before another generation, verification or health run.
+6. Use an image supporting `-host-control-config` and provide the local-only
+   `/config/host-control.json`, for example:
 
-## Daily transaction
+   ```json
+   {
+     "publish_dir": "/publish",
+     "state_dir": "/host-state",
+     "mosdns_data": "/host-mosdns/dat_exec.yaml",
+     "mosdns_template": "/config/mosdns-dat_exec.template.yaml",
+     "nginx_control_dir": "/host-nginx",
+     "request_path": "/config/host-request.json",
+     "max_file_bytes": 60000
+   }
+   ```
 
-When no application is pending, the host runs the stopped updater once. If
-`current` is already pending, it retries that version before requesting another
-release. A fresh completion `run_id` is required for each generation,
-verification and health task; a stopped container is not evidence of success.
+   Match the physical directories to the script's `state_root`, `mosdns_data`
+   and `nginx_state`. The helper never accepts arbitrary request paths. Verify
+   the image's runtime UID/GID can read its inputs and sync/rename the three
+   host directories; Nginx must also be able to read the managed include.
+7. Install the Nginx helper and stable locations. Publish and acknowledge the
+   first controlled version and enable the internal metadata endpoint. Verify
+   actual Xray assets, full MosDNS data, Nginx authoritative state, DNS/proxy
+   health and the HTTPS subscription before installing the daily controller.
 
-For a changed version, the host records one bounded transaction journal, pins
-Xray and MosDNS to `/rules/versions/<version>`, checks production health, then
-switches Nginx's active include. It checks the stable manifest before writing the
-acknowledgement. While the journal exists, the producer cannot advance or prune
-rollback data, including the acknowledgement-to-commit window.
+For an upgrade, disable both owning schedulers and require no running owning
+script job, a positively stopped worker, and **no pending journal**. Resolve an
+old-format pending transaction with its matching controller first. Snapshot the
+old image/mount attachments, helper, controller sources and scheduler settings.
+Stage the new host config/mount definitions, then install the new image, helper
+and named sources together; do not run new source against an older image/helper.
+Validate the new roles and recovery source before enabling schedules. If no
+transaction has begun, the saved image/mount/source/helper snapshot provides the
+upgrade rollback. Once a new journal exists, resolve it using the new controller
+and helper before reverting deployment files. Do not delete a journal to bypass
+an upgrade check.
 
-Nginx reload is asynchronous. The host waits up to 20 seconds for the HTTPS
-manifest to serve the desired version, allowing only a previous worker's 404 or
-older valid version during that window. TLS verification stays enabled; DNS,
-transport, other HTTP and malformed metadata errors fail immediately.
+## Named scripts and schedules
 
-An interrupted transaction is resolved before the next generation. Recovery
-uses the actual saved environment, MosDNS data and acknowledgement. On the first
-application, the original assets are the rollback target; no previous publication
-version is invented. Failed recovery retains the journal for intervention.
+`routeros/update.rsc` is a **script source**, not an importable installation file.
+Importing the body executes it; anonymous execution is rejected because it
+cannot participate in the named-job lock. Install two named `/system script`
+sources with identical public parameters:
 
-The producer retains `current` and `previous`; the host keeps one journal and the
-Nginx helper keeps one include backup. State and status files are overwritten,
-not appended. The updater stops after each task.
+- `XrayRulesUpdate`: `mode="update"`.
+- `XrayRulesRecover`: `mode="recover-only"`.
 
-The sample host uses `memory-high=160 MiB` / `memory-max=192 MiB` for generation
-and health. Only the exact native-verification command temporarily uses
-`224 MiB` / `256 MiB`; cleanup restores the generation limits. The host does not
-change the existing CPU pinning. No updater process remains resident after a
-completed task.
+Keep `script_name` and `recover_script_name` distinct and identical in both
+sources. The sum of jobs for those names must be exactly one. Invoke the named
+script with `/system script run`; do not wrap its body in an anonymous `:execute`.
+For background dispatch, execute `/system script run XrayRulesUpdate` inside
+`:execute`, preserving the named job.
 
-The updater's 96 MiB Go soft memory limit applies to its Go runtime, not the
-external Xray/MosDNS validation children. The container cgroup limits cover their
-combined memory. In the target-router trial, native verification timed out after
-60 seconds at `160/192 MiB` with approximately `177.6 MiB` current memory; at
-`224/256 MiB` it completed in `10.348 seconds`. These observations motivated the
-phase-specific limits and are consistent with a `memory.high` reclaim window;
-they do not establish an OOM event. This adjustment does not add network retries.
+After isolated target-router validation, a daily scheduler can invoke the update
+script at the selected time. A separate scheduler with `start-time=startup` and
+`interval=0` invokes only `XrayRulesRecover`. Both script and scheduler need
+`read,write,policy,test,sensitive`. RouterOS 7.23 named-script tests with forced
+script permissions showed that the base set could create/write `.txt`, but
+creating or renaming to `.json` was denied; adding `ftp` alone did not help.
+Adding `sensitive` without `ftp` allowed inline and global-function JSON
+creation/readback/removal. Request staging therefore needs `sensitive` even
+though the Go host role writes the critical state. Validate installed permissions
+and container operations on the target router.
+Keep the updater itself stopped and not auto-started.
+
+Recovery performs local journal/actual-state checks and repairs before needing
+Nginx metadata or upstream DNS. It never generates/downloads a release. After
+repair it starts the controlled consumers as needed and checks listener and
+production health. An unavailable network may fail that final check; unresolved
+owned state remains held for the next recovery attempt or intervention.
+
+## Daily transaction and interruption recovery
+
+With no pending application, the host runs the stopped producer once. If
+`current` is pending, it handles that version before generating another release.
+Every one-shot task requires a fresh completion `run_id` and the exact container
+identity in a positively stopped state. Host-control actions also require a
+fresh request nonce, expected action/transaction and `status=complete` with
+`completed=true`. Its complete false payload is durably fenced before the true
+marker is published; missing/false completion is rejected.
+A stopped container or cached status alone proves nothing.
+
+Before changing a consumer, the local Go host role atomically writes the journal,
+syncs its file and parent directory, and checks exact readback. It verifies the
+old ACK and MosDNS snapshot against the actual files. The journal binds the
+three consumer identities and attachments to the concrete old/desired versions.
+The producer cannot advance or prune while that journal exists.
+
+The host stops Xray, pins its asset environment to the candidate and restarts it;
+then stops MosDNS, durably renders the complete candidate data file and restarts
+it. It checks those actual bindings and production health before activating
+Nginx. The stable HTTPS manifest must serve the desired version before a durable
+ACK is written. Nginx commits its authoritative state before durable journal
+removal. The helper rechecks actual MosDNS, ACK and committed Nginx state before
+removing the journal.
+
+Recovery commits a new version only when **all** of these agree: ACK version and
+transaction owner, actual Xray asset environment, complete actual MosDNS data,
+and actual owned Nginx include/state. Generic connectivity and an ACK cannot
+prove which GEO files a consumer uses. A durable `rolling_back` decision always
+continues rollback, even if a new ACK survived. Unknown identities, attachments,
+foreign state or data outside the recorded old/desired states are rejected before
+stopping consumers.
+
+Rollback first durably records `rolling_back`, then stops the three consumers.
+The host role restores MosDNS and Nginx locally while Nginx is positively stopped;
+it does not depend on an operational Nginx process or DNS to repair the include.
+It restores Xray's old environment, starts the consumers and proves old actual
+bindings, health and HTTPS version. Only then does it restore the old ACK and
+durably remove the journal. A same-version ordinary update also rejects actual
+asset drift; it cannot report success based solely on the publication version.
+
+RouterOS `/file set` is used only for untrusted request staging and overwritten
+telemetry. It is not a durability fence: RouterOS NAND writeback can be delayed.
+All ACK/journal/MosDNS changes and journal deletion use file sync plus directory
+sync in the host role. The Nginx helper uses atomic replacement and real Linux
+`sync` for its owner/backup/include/state. No fixed writeback sleep substitutes
+for these operations. [MikroTik Files documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/2555971/Files)
+
+RouterOS's file API cannot follow the publisher's `current` symlink. Only current
+metadata is read from `current_manifest_url`, an internal alias to
+`/rules/current/manifest.json`; restrict it to trusted management clients. The
+HTTPS subscription manifest represents the applied version. Ordinary status,
+ACK and journal reads use their real host paths. Failed metadata requests are
+never treated as an empty first publication.
+
+The producer retains `current` and `previous`; the host keeps one bounded journal
+and the Nginx helper one include backup. Telemetry is overwritten. The updater
+exits after every task and no additional container remains resident. The host
+never enables the generated RouterOS CN candidate address list.
+
+## Resource limits
+
+Generation, health and local host-control use `memory-high=160 MiB` /
+`memory-max=192 MiB`. Only the exact native-verification command temporarily uses
+`224 MiB` / `256 MiB`; final cleanup restores the generation limits and producer
+RO role. Existing CPU pinning is unchanged.
+
+The 96 MiB Go soft memory limit covers the Go runtime, while the cgroup limit also
+covers native Xray/MosDNS validation children. On the target router verification
+timed out at `160/192 MiB` with approximately `177.6 MiB` current memory; at
+`224/256 MiB` it completed in `10.348 seconds`. This is consistent with a
+`memory.high` reclaim window and does not establish an OOM event.
 
 ## Nginx helper
 
 Run `nginx/apply.sh` inside the existing Nginx container using `/bin/sh` and
-RouterOS `no-sh`. Its defaults are `/etc/nginx/rules` for writable control state
-and `/rules` for the read-only publication. `RULES_CONTROL_DIR`,
-`RULES_PUBLISH_DIR` and `NGINX_BIN` can override these paths.
+RouterOS `no-sh`. Defaults are `/etc/nginx/rules` writable control and `/rules`
+read-only publication; `RULES_CONTROL_DIR`, `RULES_PUBLISH_DIR` and `NGINX_BIN`
+override them. `flock` and `sync` are mandatory. The host Go role and shell helper
+share `.apply.flock`; keep its inode rather than unlinking it during cleanup.
 
-Include `active.inc` in the server block containing the stable locations. It
-contains only `set $rules_version "<version>";`. Locations should resolve the
-controlled version, for example:
+Include `active.inc` in the stable server block:
 
 ```nginx
 include /etc/nginx/rules/active.inc;
@@ -108,23 +206,39 @@ location = /geosite.dat { alias /rules/versions/$rules_version/geosite.dat; }
 location = /manifest.json { alias /rules/versions/$rules_version/manifest.json; }
 ```
 
-Bootstrap must provide a valid initial include. Apply the intended access policy
-to these locations: the generated complete configuration contains proxy
-credentials. The helper itself neither adds authentication nor exposes a port.
+Apply the intended access policy: the complete client configuration contains
+proxy credentials. The helper does not add authentication or expose a port.
+Commands are `activate VERSION TOKEN REQUEST_ID`, `restore TOKEN REQUEST_ID` and
+`commit TOKEN REQUEST_ID`. Legacy calls may omit the request ID, but the daily
+controller always supplies and verifies a fresh 16-hex nonce.
 
-Commands are `activate VERSION TOKEN`, `restore TOKEN` and `commit TOKEN`.
-The helper uses a process-lifetime `flock` where available, validates before
-reload, and atomically replaces `apply-state.json`. Its successful return proves
-that the helper ran; the host separately checks what the stable manifest serves.
-Without `flock`, only the single owning host script may call it.
+`apply-state.json` remains the authoritative actual-owner record.
+`apply-result.json` is a separate bounded per-request receipt. Its complete false
+payload is synced before a fresh `completed:true` marker is exposed. The host
+checks request, action, transaction, status and version. A pre-activation no-op
+restore or rejected foreign request cannot overwrite the old authoritative owner.
 
-Local helper tests use a fake Nginx executable and do not start a service:
+Nginx reload is asynchronous. The host waits at most 20 seconds for HTTPS to serve
+the desired manifest, accepting only a previous worker's 404 or older valid
+version during that readiness window. TLS verification stays enabled; DNS,
+transport, other HTTP and malformed metadata failures abort. Production DNS and
+proxy business probes are each single requests after their listener readiness
+conditions, rather than retrying media downloads.
+
+## Local and target validation
+
+Local tests never start a network service:
 
 ```sh
 /bin/sh -n deploy/nginx/apply.sh
 python3 -m unittest discover -s deploy/nginx -p 'test_apply.py' -v
+python3 -m unittest discover -s deploy/routeros -p 'test_update.py' -v
 ```
 
-RouterOS command syntax, container names, filesystem paths, permissions and
-startup behavior still require validation on the target router. These local
-tests do not claim that the RouterOS script has passed production validation.
+Shell tests use fake Nginx/sync executables and real host-kernel flock semantics.
+They cover ownership, fresh completion, interrupted sync, rollback and malformed
+state; they do not simulate NAND power loss. RouterOS tests bind source contracts
+to the interruption-state matrix; they do not execute RouterOS. Target validation
+must additionally parse and define the actual functions, exercise isolated
+worker/mount/helper primitives, run named-script fault fixtures and validate
+startup scheduling. Keep those fixtures separate from production consumers.

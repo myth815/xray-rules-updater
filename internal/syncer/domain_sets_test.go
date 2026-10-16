@@ -56,3 +56,34 @@ func TestDerivedDomainFilenamesCannotCollide(t *testing.T) {
 		}
 	}
 }
+
+func TestMosDNSCommentDelimiterRefusalPreservesCurrent(t *testing.T) {
+	for _, source := range []string{"geo", "manual-derived"} {
+		t.Run(source, func(t *testing.T) {
+			c := fixture(t)
+			first, err := Run(context.Background(), c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source == "geo" {
+				domain := append([]byte{8, 1}, pb(2, []byte(`^api[#]tail$`))...)
+				site := pb(1, append(pb(1, []byte("cn")), pb(2, domain)...))
+				if err := os.WriteFile(c.Source.GeoSite.Path, site, 0600); err != nil {
+					t.Fatal(err)
+				}
+				c.Source.GeoSite.SHA256, c.Source.GeoSite.Size = hash(site), int64(len(site))
+			} else {
+				baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"}],"routing":{"rules":[{"type":"field","domain":["regexp:^api\\#tail$"],"outboundTag":"direct"}]}}`)
+				if err := os.WriteFile(c.Baseline, baseline, 0600); err != nil {
+					t.Fatal(err)
+				}
+				c.DomainSetsFromOutbounds = map[string]string{"business.txt": "direct"}
+			}
+			failed, err := Run(context.Background(), c)
+			if err == nil || failed.ErrorCode != "dat_invalid" {
+				t.Fatalf("lossy MosDNS matcher was not refused: %+v %v", failed, err)
+			}
+			assertCurrent(t, c, first.Version)
+		})
+	}
+}

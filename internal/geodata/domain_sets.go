@@ -85,19 +85,22 @@ func ExportDomainSetsBounded(geosite []byte, sets map[string][]string, maxFileBy
 			return nil, err
 		}
 	}
-	var total int64
+	budget := exportBudget{maxFile: maxFileBytes, maxTotal: maxTotalBytes}
 	for name, expressions := range sets {
 		unique := map[string]bool{}
 		var size int64
 		add := func(line string) error {
+			if err := validMosDNSDomainLine(line); err != nil {
+				return err
+			}
 			if unique[line] {
 				return nil
 			}
-			next := size + int64(len(line)) + 1
-			if next > maxFileBytes || next > maxTotalBytes-total {
-				return fmt.Errorf("domain export exceeds file or publication size limit")
+			n := int64(len(line)) + 1
+			if err := budget.add(size, n); err != nil {
+				return err
 			}
-			unique[line], size = true, next
+			unique[line], size = true, size+n
 			return nil
 		}
 		for _, expression := range expressions {
@@ -128,7 +131,6 @@ func ExportDomainSetsBounded(geosite []byte, sets map[string][]string, maxFileBy
 		}
 		sort.Strings(lines)
 		r.Files[name], r.Counts[name] = textLines(lines), len(lines)
-		total += size
 	}
 	return r, nil
 }

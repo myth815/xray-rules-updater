@@ -1,0 +1,9 @@
+{
+  "publish_dir": "/publish",
+  "state_dir": "/host-state",
+  "mosdns_data": "/host-mosdns/dat_exec.yaml",
+  "mosdns_template": "/config/mosdns-dat_exec.template.yaml",
+  "nginx_control_dir": "/host-nginx",
+  "request_path": "/config/host-request.json",
+  "max_file_bytes": 60000
+}

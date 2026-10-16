@@ -308,6 +308,34 @@ func TestGenerateBalancerPreservesAllPrefixMatchesAndFallback(t *testing.T) {
 	assertJSONEqual(t, out["routing"], decodeObject(t, []byte(baseline))["routing"])
 }
 
+func TestGenerateRejectsExtraOutboundExpandingBaselineBalancer(t *testing.T) {
+	baseline := []byte(`{"routing":{"rules":[{"network":"tcp,udp","balancerTag":"pool"}],"balancers":[{"tag":"pool","selector":["edge-"],"strategy":{"type":"roundRobin"}}]},"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"edge-original","protocol":"socks"}]}`)
+	for _, keep := range [][]string{nil, {"direct"}, {"direct", "edge-home"}} {
+		_, err := Generate(baseline, Overlay{
+			KeepOutbounds:  keep,
+			ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"edge-home","protocol":"freedom"}`)},
+		}, "v1")
+		if err == nil || !strings.Contains(err.Error(), "extra outbound would expand a baseline balancer selector") {
+			t.Fatalf("keep=%v: expanded baseline pool accepted: %v", keep, err)
+		}
+	}
+
+	// A disjoint client identity remains selectable without changing the pool,
+	// original outbound order or default.
+	extra := json.RawMessage(`{"tag":"home_out","protocol":"freedom"}`)
+	result, err := Generate(baseline, Overlay{
+		KeepOutbounds:  []string{"direct", "home_out"},
+		ExtraOutbounds: []json.RawMessage{extra},
+	}, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := decodeObject(t, result)
+	want := append(decodeArray(t, decodeObject(t, baseline)["outbounds"]), extra)
+	assertJSONEqual(t, out["outbounds"], marshal(t, want))
+	assertJSONEqual(t, out["routing"], decodeObject(t, baseline)["routing"])
+}
+
 func TestGenerateDoesNotInventRoutingOrMetadata(t *testing.T) {
 	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"}]}`)
 	result, err := Generate(baseline, Overlay{Name: "one"}, "v1")
