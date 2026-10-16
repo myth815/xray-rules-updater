@@ -34,15 +34,16 @@
 }
 
 :global RUXReadJSON do={
-    :local name $1; :local required $2; :local body ""; :local found true;
-    :do { :set body [/file get $name contents]; } on-error={ :set found false; }
+    :local inputPath $1; :local required $2; :local inputBody ""; :local found true;
+    :if ([:typeof $required] != "bool") do={ :error "rules JSON required flag must be boolean"; }
+    :do { :set inputBody [/file get $inputPath contents]; } on-error={ :set found false; }
     :if (!$found) do={
         :if ($required) do={ :error "rules JSON input is unavailable"; }
         :return "";
     }
-    :local value [:deserialize from=json value=$body options=json.no-string-conversion];
-    :if ([:typeof $value] != "array") do={ :error "rules JSON input is not an object"; }
-    :return $value;
+    :local decodedJSON [:deserialize from=json value=$inputBody options=json.no-string-conversion];
+    :if ([:typeof $decodedJSON] != "array") do={ :error "rules JSON input is not an object"; }
+    :return $decodedJSON;
 }
 :global RUXReadCurrent do={
     :local c $1;
@@ -58,23 +59,31 @@
     :return $manifest;
 }
 :global RUXWriteFile do={
-    :local name $1; :local body $2;
-    :if ([:len $body] > 60000) do={ :error "rules host state exceeds file limit"; }
-    :if ([:len [/file find where name=$name]] = 0) do={ /file add name=$name type=file; }
-    /file set $name contents=$body;
+    :local targetPath $1; :local targetBody $2;
+    :if ([:len $targetBody] > 60000) do={ :error "rules host state exceeds file limit"; }
+    # RouterOS property names are reserved variables. Using local name here
+    # makes where name=$name match every file instead of the requested path.
+    :local fileIDs [/file find where name=$targetPath];
+    :if ([:len $fileIDs] > 1) do={ :error "rules host state path is ambiguous"; }
+    :if ([:len $fileIDs] = 0) do={
+        /file add name=$targetPath type=file;
+        :set fileIDs [/file find where name=$targetPath];
+    }
+    :if ([:len $fileIDs] != 1) do={ :error "rules host state file was not created"; }
+    /file set [:pick $fileIDs 0] contents=$targetBody;
 }
 :global RUXContainer do={
-    :local name $1; :local ids [/container find where name=$name];
+    :local containerName $1; :local ids [/container find where name=$containerName];
     :if ([:len $ids] != 1) do={ :error "rules container name is missing or ambiguous"; }
     :return [:pick $ids 0];
 }
 :global RUXRunOneShot do={
     :global RUXReadJSON; :global RUXContainer;
     :local c $1; :local command $2; :local statusFile $3;
-    :local name ($c->"updater"); :local id [$RUXContainer $name];
-    :local row [:pick [/container print as-value where name=$name] 0];
+    :local workerName ($c->"updater"); :local id [$RUXContainer $workerName];
+    :local row [:pick [/container print as-value where name=$workerName] 0];
     :if (($row->"running") = true) do={ :error "rules updater is already running"; }
-    :local old [$RUXReadJSON $statusFile false]; :local oldRun "";
+    :local old [$RUXReadJSON $statusFile (false)]; :local oldRun "";
     :if ([:typeof $old] = "array") do={ :set oldRun ($old->"run_id"); }
     # Native verification includes the target Xray/MosDNS children in this
     # cgroup. Increase its transient limit only for this exact verify command.
@@ -86,8 +95,8 @@
     /container start $id;
     :for wait from=0 to=(($c->"task_seconds") * 2) do={
         :delay 500ms;
-        :local state [$RUXReadJSON $statusFile false];
-        :local now [:pick [/container print as-value where name=$name] 0];
+        :local state [$RUXReadJSON $statusFile (false)];
+        :local now [:pick [/container print as-value where name=$workerName] 0];
         :if ([:typeof $state] = "array") do={
             :local newRun ($state->"run_id");
             :if (([:typeof $newRun] = "str") && ($newRun ~ "^[a-f0-9]{16}\$") && ($newRun != $oldRun) && (($now->"running") != true)) do={ :return $state; }
@@ -98,10 +107,10 @@
 }
 :global RUXStop do={
     :global RUXContainer;
-    :local name $1; :local id [$RUXContainer $name];
+    :local consumerName $1; :local id [$RUXContainer $consumerName];
     /container stop $id;
     :for wait from=0 to=60 do={
-        :local row [:pick [/container print as-value where name=$name] 0];
+        :local row [:pick [/container print as-value where name=$consumerName] 0];
         :if (($row->"running") != true) do={ :return; }
         :delay 500ms;
     }
@@ -109,22 +118,23 @@
 }
 :global RUXStart do={
     :global RUXContainer;
-    :local name $1; /container start [$RUXContainer $name];
+    :local consumerName $1; /container start [$RUXContainer $consumerName];
     :for wait from=0 to=60 do={
-        :local row [:pick [/container print as-value where name=$name] 0];
+        :local row [:pick [/container print as-value where name=$consumerName] 0];
         :if (($row->"running") = true) do={ :return; }
         :delay 500ms;
     }
     :error "rules consumer did not start";
 }
 :global RUXSetAsset do={
-    :local listName $1; :local present $2; :local value $3;
+    :local listName $1; :local present $2; :local assetPath $3;
+    :if ([:typeof $present] != "bool") do={ :error "rules asset presence flag must be boolean"; }
     :local ids [/container envs find where list=$listName and key="XRAY_LOCATION_ASSET"];
     :if ([:len $ids] > 1) do={ :error "rules asset environment is ambiguous"; }
     :if (!$present) do={ /container envs remove $ids; :return; }
     :if ([:len $ids] = 0) do={
-        /container envs add list=$listName key="XRAY_LOCATION_ASSET" value=$value;
-    } else={ /container envs set [:pick $ids 0] value=$value; }
+        /container envs add list=$listName key="XRAY_LOCATION_ASSET" value=$assetPath;
+    } else={ /container envs set [:pick $ids 0] value=$assetPath; }
 }
 :global RUXRenderMos do={
     :local source $1; :local assets $2; :local marker "@@RULES_ASSET_DIR@@";
@@ -157,7 +167,7 @@
     }
     :set command ($command . " " . $token);
     /container shell [$RUXContainer ($c->"nginx")] cmd=$command no-sh;
-    :local state [$RUXReadJSON ($c->"nginx_state") true];
+    :local state [$RUXReadJSON ($c->"nginx_state") (true)];
     :local expected "";
     :if ($action = "activate") do={ :set expected "activated"; }
     :if ($action = "restore") do={ :set expected "restored"; }
@@ -229,7 +239,7 @@
 
 :do {
     # Recover a bounded interrupted host transaction before any generation.
-    :local interrupted [$RUXReadJSON $journalPath false];
+    :local interrupted [$RUXReadJSON $journalPath (false)];
     :if ([:typeof $interrupted] = "array") do={
         :set interrupted [$RUXValidateJournal $interrupted];
         :set applying true;
@@ -237,7 +247,7 @@
         # later ACK write; recover from the valid journal in that case. Outside
         # this recovery branch, malformed ACKs still fail closed.
         :local acknowledged "";
-        :do { :set acknowledged [$RUXReadJSON $ackPath false]; } on-error={ :set acknowledged ""; }
+        :do { :set acknowledged [$RUXReadJSON $ackPath (false)]; } on-error={ :set acknowledged ""; }
         :if (([:typeof $acknowledged] = "array") && (($acknowledged->"version") = ($interrupted->"desired_version"))) do={
             :local health [$RUXProbe $settings];
             $RUXCheckSubscription $settings ($interrupted->"desired_version");
@@ -248,7 +258,7 @@
     }
 
     :local manifest [$RUXReadCurrent $settings];
-    :local applied [$RUXReadJSON $ackPath false]; :local oldVersion "";
+    :local applied [$RUXReadJSON $ackPath (false)]; :local oldVersion "";
     :if ([:typeof $applied] = "array") do={
         :local acknowledgedVersion ($applied->"version");
         :if ([:typeof $acknowledgedVersion] != "str") do={ :error "rules previous acknowledgement version is invalid"; }
@@ -293,7 +303,7 @@
         :local nextData [$RUXRenderMos $template $assets];
         :set phase "apply_xray";
         $RUXStop ($settings->"xray");
-        $RUXSetAsset ($settings->"xray_env_list") true $assets;
+        $RUXSetAsset ($settings->"xray_env_list") (true) $assets;
         $RUXStart ($settings->"xray");
         :set phase "apply_mosdns";
         $RUXStop ($settings->"mosdns");
@@ -316,7 +326,7 @@
 } on-error={
     :if ($applying) do={
         :do {
-            :local journal [$RUXReadJSON $journalPath true];
+            :local journal [$RUXReadJSON $journalPath (true)];
             $RUXRestore $settings $journal;
             /file remove [/file find where name=$journalPath];
         } on-error={ :log error "xray-rules-updater: rollback incomplete; transaction retained"; }
