@@ -82,9 +82,38 @@ with a fixed release tag. One successful `latest` response is resolved per run; 
 both hashes are frozen before asset downloads. Assets without release SHA256
 digests are rejected rather than trusted implicitly.
 
-Transient connection failures (including a newly started RouterOS veth initially
-returning no route to the proxy), connection resets/timeouts and HTTP 5xx receive
-at most three attempts with bounded delays, within the task deadline. Certificate,
+### RouterOS startup order
+
+Prepare the configuration, mounts, proxy environment and bridge port before
+starting the one-shot container. For its dedicated veth endpoint, with no
+downstream bridge, explicitly set `edge=yes` on **that port only**:
+
+```routeros
+/interface bridge port set [find where interface="VethXrayRulesUpdater"] edge=yes
+```
+
+Use the actual updater veth name. On an RSTP bridge, `edge=auto` can initially
+hold a freshly started veth out of forwarding, even when the container process
+has started. This can recur on each stop/start. Image import completion is not
+network readiness. [MikroTik documents the edge-port behavior here](https://help.mikrotik.com/docs/spaces/ROS/pages/328068/Bridging%2Band%2BSwitching).
+
+In an isolated RB5009 A/B test, the same single-request probe with no retry or
+warm-up failed once under `auto` and connected after about three seconds on its
+second start. Under `yes`, both starts connected in 0–1 ms and returned HTTP 200.
+Bridge monitoring confirmed the corresponding forwarding states. The updater
+endpoint setting fixes this startup prerequisite; do not disable RSTP globally
+or apply an edge setting to ports connected to another bridge.
+
+The configured proxy must also be available before the scheduler launches this
+task. Application requests then select the proxy, establish TCP/CONNECT and TLS,
+resolve one release, download its pinned assets, validate and publish. No warm-up
+request or fixed startup sleep is needed for the observed bridge issue.
+
+Limited retries are fallback for unexpected transient faults, not a substitute
+for those startup prerequisites. Transient connection failures,
+connection resets/timeouts and HTTP 500/502/503/504
+receive at most three attempts per HTTP request, including the initial attempt,
+with bounded delays within the task deadline. Certificate,
 hash, size and policy validation errors are not retried or bypassed. Error codes
 distinguish transport/TLS/HTTP failures without logging URLs or credentials.
 
@@ -130,8 +159,9 @@ Replace the entire `source` object; do not mix it with `repository`/`tag`.
   still client actions. The publisher does not claim an atomic client update.
 - The storage budget counts retained publications plus the candidate; free-space
   reserve is additional. Defaults: 160 MiB publication budget, 64 MiB disk reserve,
-  40 MiB per DAT, 300 seconds. Go uses one execution thread and a 96 MiB soft heap
-  limit; container limits remain the hard resource boundary. Measure on the host.
+  40 MiB per DAT, 300 seconds. Go CPU parallelism is limited to one, with a 96 MiB
+  soft Go memory limit; container limits remain the hard resource boundary.
+  Measure on the host.
 - Pre-commit errors keep the old current version. Pointer changes are atomic,
   but current/previous are not one cross-file transaction. A directory-sync error
   after current changes reports `published_durability_uncertain`, not a false
