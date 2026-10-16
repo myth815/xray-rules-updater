@@ -54,7 +54,7 @@
     :if ([:typeof $manifest] != "array") do={ :error "rules current metadata is not an object"; }
     :local version ($manifest->"version");
     :if ([:typeof $version] != "str") do={ :error "rules current metadata version is invalid"; }
-    :if (!($version ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules current metadata version is invalid"; }
+    :if (!($version ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules current metadata version is invalid"; }
     :return $manifest;
 }
 :global RUXWriteFile do={
@@ -90,7 +90,7 @@
         :local now [:pick [/container print as-value where name=$name] 0];
         :if ([:typeof $state] = "array") do={
             :local newRun ($state->"run_id");
-            :if (([:typeof $newRun] = "str") && ($newRun ~ "^[a-f0-9]{16}$") && ($newRun != $oldRun) && (($now->"running") != true)) do={ :return $state; }
+            :if (([:typeof $newRun] = "str") && ($newRun ~ "^[a-f0-9]{16}\$") && ($newRun != $oldRun) && (($now->"running") != true)) do={ :return $state; }
         }
     }
     /container stop $id;
@@ -149,10 +149,10 @@
 :global RUXNginx do={
     :global RUXReadJSON; :global RUXContainer;
     :local c $1; :local action $2; :local version $3; :local token $4;
-    :if (!($token ~ "^[a-f0-9]{16}$")) do={ :error "rules transaction token is invalid"; }
+    :if (!($token ~ "^[a-f0-9]{16}\$")) do={ :error "rules transaction token is invalid"; }
     :local command ("/bin/sh " . ($c->"nginx_helper") . " " . $action);
     :if ($action = "activate") do={
-        :if (!($version ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules version is invalid"; }
+        :if (!($version ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules version is invalid"; }
         :set command ($command . " " . $version);
     }
     :set command ($command . " " . $token);
@@ -181,12 +181,12 @@
     :foreach field in={"old_asset_present";"old_ack_present"} do={
         :if ([:typeof ($journal->$field)] != "bool") do={ :error "rules transaction boolean field is invalid"; }
     }
-    :if (!(($journal->"run_id") ~ "^[a-f0-9]{16}$")) do={ :error "rules transaction token is invalid"; }
-    :if (!(($journal->"desired_version") ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules transaction desired version is invalid"; }
+    :if (!(($journal->"run_id") ~ "^[a-f0-9]{16}\$")) do={ :error "rules transaction token is invalid"; }
+    :if (!(($journal->"desired_version") ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules transaction desired version is invalid"; }
     :if (([:len ($journal->"old_mosdns_data")] = 0) || ([:len ($journal->"old_mosdns_data")] > 60000)) do={ :error "rules transaction MosDNS snapshot is invalid"; }
     :if (($journal->"old_ack_present") = true) do={
         :local previous ($journal->"old_applied_version");
-        :if (!($previous ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules transaction previous version is invalid"; }
+        :if (!($previous ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules transaction previous version is invalid"; }
         :if ($previous = ($journal->"desired_version")) do={ :error "rules transaction previous version equals desired version"; }
         :local oldAck [:deserialize from=json value=($journal->"old_ack_content") options=json.no-string-conversion];
         :if ([:typeof $oldAck] != "array") do={ :error "rules transaction acknowledgement snapshot is invalid"; }
@@ -252,7 +252,7 @@
     :if ([:typeof $applied] = "array") do={
         :local acknowledgedVersion ($applied->"version");
         :if ([:typeof $acknowledgedVersion] != "str") do={ :error "rules previous acknowledgement version is invalid"; }
-        :if (!($acknowledgedVersion ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules previous acknowledgement version is invalid"; }
+        :if (!($acknowledgedVersion ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules previous acknowledgement version is invalid"; }
         :set oldVersion $acknowledgedVersion;
     }
     :if ([:typeof $manifest] = "array") do={ :set current ($manifest->"version"); }
@@ -265,7 +265,7 @@
         :if ($current != ($generated->"version")) do={ :error "rules generation and current manifest disagree"; }
     }
     # Pending current skips generation, even if upstream latest has advanced.
-    :if (!($current ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules current version is invalid"; }
+    :if (!($current ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules current version is invalid"; }
     :if ($current = $oldVersion) do={
         :set phase "unchanged_health";
         :local health [$RUXProbe $settings];
