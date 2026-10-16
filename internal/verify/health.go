@@ -61,8 +61,9 @@ func (c *HealthConfig) validate() (*url.URL, error) {
 	return p, nil
 }
 
-// Health probes live consumers using a task-local explicit proxy and two direct
-// DNS queries. The HTTPS target is fixed; no redirect, retry, or global proxy
+// Health waits for the DNS TCP and explicit proxy TCP listeners, then probes
+// live consumers with two single DNS queries and one HTTPS request. Listener
+// readiness is not a business request retry. No redirect or global proxy
 // mutation is performed. A healthy result is not evidence of loaded GEO hashes.
 func Health(parent context.Context, c HealthConfig) (s Summary, err error) {
 	start := time.Now()
@@ -118,6 +119,11 @@ func Health(parent context.Context, c HealthConfig) (s Summary, err error) {
 	}
 	s.Version = m.Version
 	s.BaselineSHA256 = m.BaselineSHA256
+	s.Phase = "health_ready"
+	if e = waitHealthReady(ctx, c.DNSServer, proxy); e != nil {
+		return s, e
+	}
+	s.Phase = "health_dns"
 	for _, name := range []string{"www.baidu.com", "github.com"} {
 		if e = query(ctx, c.DNSServer, name, 0, true); e != nil {
 			if ctx.Err() != nil {
@@ -126,12 +132,54 @@ func Health(parent context.Context, c HealthConfig) (s Summary, err error) {
 			return s, failure("health_dns")
 		}
 	}
+	s.Phase = "health_https"
 	if e = healthHTTP(ctx, proxy); e != nil {
 		return s, e
 	}
 	s.Status = "healthy"
+	s.Phase = "complete"
 	return s, nil
 }
+
+func waitHealthReady(ctx context.Context, dns string, proxy *url.URL) error {
+	port := proxy.Port()
+	if port == "" {
+		port = "80"
+		if proxy.Scheme == "https" {
+			port = "443"
+		}
+	}
+	if proxy.Hostname() == "" {
+		return failure("health_ready")
+	}
+	targets := []string{net.JoinHostPort(proxy.Hostname(), port), dns}
+	dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+	for {
+		ready := true
+		for _, target := range targets {
+			connection, err := dialer.DialContext(ctx, "tcp", target)
+			if err != nil {
+				ready = false
+			} else {
+				connection.Close()
+			}
+			if ctx.Err() != nil {
+				return failure("health_timeout")
+			}
+		}
+		if ready {
+			return nil
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return failure("health_timeout")
+		case <-timer.C:
+		}
+	}
+}
+
 func healthHTTP(ctx context.Context, proxy *url.URL) error {
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, ForceAttemptHTTP2: true}
 	defer transport.CloseIdleConnections()

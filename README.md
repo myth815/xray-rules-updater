@@ -278,10 +278,14 @@ xray-rules-updater -health-config /config/health.json
   runs the mounted target Xray binary with `run -test` against the complete
   server baseline and candidate DAT, and starts a temporary MosDNS instance to
   check its configuration and DNS answers. It writes `verification.json`.
-- `-health-config` checks the current publication's integrity, queries the
-  configured live DNS server and makes one fixed HTTPS request through the
-  configured task-local HTTP proxy. It writes `health.json`; healthy responses
-  do not prove the running consumers loaded particular GEO hashes.
+- `-health-config` checks the current publication's integrity and waits for
+  both the explicit proxy and DNS TCP listeners before querying the live DNS
+  server and making one fixed HTTPS request through the task-local HTTP proxy.
+  The DNS server must support TCP on the same configured IP and port as UDP.
+  Readiness uses TCP connects of at most 200 ms with 100 ms between checks,
+  within the health task's overall timeout (at most 30 seconds); the actual
+  DNS and HTTPS requests are each sent once. It writes `health.json`; healthy
+  responses do not prove the running consumers loaded particular GEO hashes.
 
 Verification configuration supplies absolute `publish_dir`, `xray_binary`,
 `xray_config_dir`, `mosdns_binary`, `mosdns_config_dir` paths and an optional
