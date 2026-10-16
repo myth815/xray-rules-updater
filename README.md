@@ -38,7 +38,7 @@ full snapshot before running it.
 docker run --rm --memory=192m --cpus=1 \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/publish:/publish" \
-  ghcr.io/myth815/xray-rules-updater:v0.1.0
+  ghcr.io/myth815/xray-rules-updater:v0.1.1
 ```
 
 Mount the publication into an existing Nginx instance read-only. Serve
@@ -122,7 +122,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/xray-rules-updater
 
 Tests use synthetic DATs, fake nodes and mocked HTTPS. Optional local fixture
 tests can compare derived data against an independently generated pinned release.
-CI tests then publishes Linux ARM64 and AMD64 images to GHCR, with immutable
+CI tests then publishes Linux ARM64 and AMD64 images to GHCR using Docker media
+types for RouterOS compatibility, with immutable
 commit tags and version tags. Deploy a tested version/digest; `latest` is a
 convenience tag. Real baselines, DAT downloads and output directories are ignored
 by Git and excluded from the Docker build context.
