@@ -1,4 +1,9 @@
 .git
+config
+config.json
+baseline.json
+overlay.json
+**/__pycache__
 runtime
 publish
 dist

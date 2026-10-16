@@ -1,5 +1,7 @@
 # xray-rules-updater
 
+Xray GEO 规则更新器：同步 MosDNS、RouterOS 数据，并生成 OneXray 完整配置。
+
 A small, one-shot Go publisher for a home network using native Xray, MosDNS,
 RouterOS and OneXray. The runtime image contains only the static executable and
 CA certificates. It has no daemon, database, cron, management UI or proxy core.
@@ -38,7 +40,7 @@ full snapshot before running it.
 docker run --rm --memory=192m --cpus=1 \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/publish:/publish" \
-  ghcr.io/myth815/xray-rules-updater:v0.1.1
+  ghcr.io/myth815/xray-rules-updater:v0.1.2
 ```
 
 Mount the publication into an existing Nginx instance read-only. Serve
@@ -68,17 +70,23 @@ uncompressed layer against the original config's `diff_ids`; it does not change
 the executable or layer contents and is not included in the runtime image.
 
 ```sh
-docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.1.1
-docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.1.1
+docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.1.2
+docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.1.2
 python3 tools/docker_save_for_routeros.py image.tar image-routeros.tar
 ```
 
 If downloads need a proxy, supply `HTTPS_PROXY` only to this task's environment;
 the publisher honors Go's standard proxy environment variables. It never changes
 system proxy, DNS or routing. For reproducibility replace `source.tag: latest`
-with a fixed release tag. `latest` is queried once per run; the resolved tag and
+with a fixed release tag. One successful `latest` response is resolved per run; the tag and
 both hashes are frozen before asset downloads. Assets without release SHA256
 digests are rejected rather than trusted implicitly.
+
+Transient connection failures (including a newly started RouterOS veth initially
+returning no route to the proxy), connection resets/timeouts and HTTP 5xx receive
+at most three attempts with bounded delays, within the task deadline. Certificate,
+hash, size and policy validation errors are not retried or bypassed. Error codes
+distinguish transport/TLS/HTTP failures without logging URLs or credentials.
 
 Explicit offline source format:
 
@@ -104,6 +112,12 @@ Replace the entire `source` object; do not mix it with `repository`/`tag`.
   can be dropped explicitly. Mixed inbound/business conditions, DNS-generated
   inbound policies, unhandled observers and host-bound sockets/interfaces/marks
   require explicit adaptation and otherwise fail.
+- `client.extra_outbounds` can explicitly append client-only nodes such as a
+  return-home `home_out`, then `client.prepend_rules` places exact NAS/media rules
+  before private/direct routing. Extra nodes undergo the same tag, dependency and
+  host-binding validation; they cannot overwrite baseline nodes or change the
+  default outbound. Client identities must be supplied explicitly, never derived
+  from a router server's private key.
 - Nonempty shared `transport`, arbitrary top-level modules and external file
   references are rejected. The adapter is structural, not a replacement for
   `xray run -test` with the target core and actual DAT files.

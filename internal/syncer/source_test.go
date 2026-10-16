@@ -10,8 +10,70 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func TestFetchBoundedTransientRetry(t *testing.T) {
+	original := sourceRetryDelay
+	sourceRetryDelay = 0
+	t.Cleanup(func() { sourceRetryDelay = original })
+	for _, tc := range []struct {
+		name   string
+		fail   error
+		status int
+		want   int
+	}{
+		{"unreachable", syscall.EHOSTUNREACH, 0, 2},
+		{"reset", syscall.ECONNRESET, 0, 2},
+		{"proxy warming", nil, 502, 2},
+		{"forbidden", nil, 403, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			sourceTransport(t, func(r *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					if tc.fail != nil {
+						return nil, tc.fail
+					}
+					return sourceResponse(r, tc.status, "error", -1), nil
+				}
+				return sourceResponse(r, 200, "ok", 2), nil
+			})
+			body, err := fetch(context.Background(), "https://source.invalid/data", 8)
+			if calls != tc.want {
+				t.Fatalf("attempt count %d != %d", calls, tc.want)
+			}
+			if tc.want == 2 && (err != nil || string(body) != "ok") {
+				t.Fatalf("transient failure not recovered: %v", err)
+			}
+			if tc.want == 1 && err == nil {
+				t.Fatal("permanent failure accepted")
+			}
+		})
+	}
+	calls := 0
+	sourceTransport(t, func(r *http.Request) (*http.Response, error) { calls++; return nil, syscall.EHOSTUNREACH })
+	if _, err := fetch(context.Background(), "https://source.invalid/data", 8); err == nil || calls != 3 {
+		t.Fatalf("retry not bounded: %d %v", calls, err)
+	}
+}
+
+func TestFetchRetryHonorsCancellation(t *testing.T) {
+	original := sourceRetryDelay
+	sourceRetryDelay = time.Hour
+	t.Cleanup(func() { sourceRetryDelay = original })
+	sourceTransport(t, func(r *http.Request) (*http.Response, error) { return nil, syscall.EHOSTUNREACH })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := fetch(ctx, "https://source.invalid/data", 8)
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("deadline not honored: %v", err)
+	}
+}
 
 type sourceRoundTripper func(*http.Request) (*http.Response, error)
 

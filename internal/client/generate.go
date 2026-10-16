@@ -15,11 +15,14 @@ import (
 // Overlay contains the deliberate differences between the router baseline and
 // a client. An empty KeepOutbounds preserves all outbounds. An explicit list is
 // expanded by outbound chains and balancer selectors; baseline order is kept.
+// ExtraOutbounds appends explicitly supplied client identities after the
+// baseline; it cannot replace a tag or change the baseline's default outbound.
 // Name and the Generate version argument belong in the release manifest, not in
 // the native Xray configuration owned by the app.
 type Overlay struct {
 	Name             string            `json:"name"`
 	KeepOutbounds    []string          `json:"keep_outbounds"`
+	ExtraOutbounds   []json.RawMessage `json:"extra_outbounds"`
 	DropInboundRules bool              `json:"drop_inbound_rules"`
 	PrependRules     []json.RawMessage `json:"prepend_rules"`
 	DNS              json.RawMessage   `json:"dns"`
@@ -88,7 +91,27 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 		}
 	}
 
-	outs, byTag, err := readOutbounds(top["outbounds"])
+	outboundJSON := top["outbounds"]
+	if len(overlay.ExtraOutbounds) != 0 {
+		entries, err := readArray(outboundJSON, "outbounds")
+		if err != nil {
+			return nil, err
+		}
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("outbounds: at least one tagged baseline outbound is required before adding client outbounds")
+		}
+		for i, raw := range overlay.ExtraOutbounds {
+			if _, err := readObject(raw, fmt.Sprintf("extra_outbounds[%d]", i)); err != nil {
+				return nil, err
+			}
+			entries = append(entries, append(json.RawMessage(nil), raw...))
+		}
+		outboundJSON, err = json.Marshal(entries)
+		if err != nil {
+			return nil, fmt.Errorf("encode combined outbounds: %w", err)
+		}
+	}
+	outs, byTag, err := readOutbounds(outboundJSON)
 	if err != nil {
 		return nil, err
 	}

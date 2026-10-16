@@ -3,16 +3,69 @@ package syncer
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// sourceFailure keeps useful diagnostics without exposing URLs or credentials.
+type sourceFailure struct{ Code string }
+
+func (e *sourceFailure) Error() string { return e.Code }
+func transportFailure(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return &sourceFailure{"source_cancelled"}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &sourceFailure{"source_timeout"}
+	}
+	for _, entry := range []struct {
+		cause error
+		code  string
+	}{
+		{syscall.EHOSTUNREACH, "source_network_unreachable"}, {syscall.ENETUNREACH, "source_network_unreachable"},
+		{syscall.ECONNRESET, "source_connection_reset"}, {syscall.ECONNREFUSED, "source_connection_refused"},
+		{io.EOF, "source_eof"}, {io.ErrUnexpectedEOF, "source_eof"},
+	} {
+		if errors.Is(err, entry.cause) {
+			return &sourceFailure{entry.code}
+		}
+	}
+	var certificate x509.UnknownAuthorityError
+	if errors.As(err, &certificate) {
+		return &sourceFailure{"source_tls_authority"}
+	}
+	var invalidCertificate x509.CertificateInvalidError
+	if errors.As(err, &invalidCertificate) {
+		return &sourceFailure{"source_tls_certificate"}
+	}
+	var hostname x509.HostnameError
+	if errors.As(err, &hostname) {
+		return &sourceFailure{"source_tls_hostname"}
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return &sourceFailure{"source_dns"}
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return &sourceFailure{"source_timeout"}
+	}
+	if strings.Contains(err.Error(), "Forbidden") {
+		return &sourceFailure{"source_proxy_forbidden"}
+	}
+	return &sourceFailure{"source_transport"}
+}
 
 func httpClient() *http.Client {
 	return &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -27,6 +80,44 @@ func fetch(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return nil, errors.New("invalid HTTPS source")
 	}
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, transportFailure(err)
+		}
+		data, err := fetchOnce(ctx, rawURL, limit)
+		if err == nil {
+			return data, nil
+		}
+		last = err
+		if !retryableSource(err) || attempt == 2 {
+			return nil, err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * sourceRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, &sourceFailure{"source_cancelled"}
+		case <-timer.C:
+		}
+	}
+	return nil, last
+}
+
+var sourceRetryDelay = 250 * time.Millisecond
+
+func retryableSource(err error) bool {
+	var failure *sourceFailure
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.Code {
+	case "source_network_unreachable", "source_connection_reset", "source_connection_refused", "source_eof", "source_timeout", "source_http_500", "source_http_502", "source_http_503", "source_http_504":
+		return true
+	}
+	return false
+}
+func fetchOnce(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, errors.New("source request failed")
@@ -35,18 +126,18 @@ func fetch(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := httpClient().Do(req)
 	if err != nil {
-		return nil, errors.New("source request failed")
+		return nil, transportFailure(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("source returned non-200 status")
+		return nil, &sourceFailure{fmt.Sprintf("source_http_%d", resp.StatusCode)}
 	}
 	if resp.ContentLength > limit {
 		return nil, errors.New("source exceeds size limit")
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, errors.New("source read failed")
+		return nil, transportFailure(err)
 	}
 	if int64(len(data)) > limit {
 		return nil, errors.New("source exceeds size limit")

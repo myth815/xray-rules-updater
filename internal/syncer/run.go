@@ -127,7 +127,7 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	}
 	list := ""
 	if c.RouterOSCandidate {
-		list = "NPS_CN_" + version
+		list = "XrayCN_" + version
 	}
 	derived, e := geodata.Export(ip, site, c.Sites, c.IPs, list)
 	if e != nil {
@@ -208,6 +208,10 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 }
 
 func errorCode(err error) string {
+	var source *sourceFailure
+	if errors.As(err, &source) {
+		return source.Code
+	}
 	text := err.Error()
 	for _, entry := range []struct{ key, code string }{
 		{"storage", "capacity"}, {"space", "capacity"}, {"SHA256", "digest"}, {"GEO dependency", "geo_reference"}, {"DAT export", "dat_invalid"}, {"client adaptation", "client_invalid"}, {"source", "source_fetch"}, {"release", "source_release"}, {"baseline changed", "baseline_changed"}, {"lock", "busy"}, {"durability", "commit_durability"},

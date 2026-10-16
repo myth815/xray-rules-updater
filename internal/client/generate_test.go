@@ -96,6 +96,91 @@ func TestGenerateDNSOverlayAndExplicitPrepend(t *testing.T) {
 	assertJSONEqual(t, rules[0], prepended)
 }
 
+func TestGenerateExtraHomeOutboundsAndRules(t *testing.T) {
+	baseline := []byte(baselineFixture)
+	before := append([]byte(nil), baseline...)
+	extras := []json.RawMessage{
+		json.RawMessage(`{"tag":"home_out","protocol":"wireguard","settings":{"secretKey":"SYNTHETIC-HOME-CLIENT-KEY","address":["192.0.2.2/32"],"peers":[{"publicKey":"SYNTHETIC-HOME-PUBLIC-KEY","endpoint":"vpn.home.example:51820"}]},"streamSettings":{"sockopt":{"dialerProxy":"home_transport"}}}`),
+		json.RawMessage(`{"tag":"home_transport","protocol":"socks","settings":{"servers":[{"address":"192.0.2.20","port":1080}]}}`),
+	}
+	prepended := []json.RawMessage{
+		json.RawMessage(`{"domain":["domain:home.example"],"outboundTag":"home_out"}`),
+		json.RawMessage(`{"ip":["10.20.30.0/24"],"outboundTag":"home_out"}`),
+		json.RawMessage(`{"ip":["geoip:private"],"outboundTag":"direct"}`),
+	}
+	overlay := Overlay{
+		KeepOutbounds:  []string{"direct", "block", "usa", "home_out"},
+		ExtraOutbounds: extras, DropInboundRules: true, PrependRules: prepended,
+	}
+	overlayBefore := marshal(t, overlay)
+	result, err := Generate(baseline, overlay, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, baseline) || !bytes.Equal(overlayBefore, marshal(t, overlay)) {
+		t.Fatal("Generate mutated its inputs")
+	}
+	output := decodeObject(t, result)
+	originalOutbounds := decodeArray(t, decodeObject(t, before)["outbounds"])
+	wantOutbounds := append(originalOutbounds[:5:5], extras...)
+	assertJSONEqual(t, output["outbounds"], marshal(t, wantOutbounds))
+	originalRules := decodeArray(t, decodeObject(t, decodeObject(t, before)["routing"])["rules"])
+	wantRules := append(append([]json.RawMessage(nil), prepended...), originalRules[1:]...)
+	assertJSONEqual(t, decodeObject(t, output["routing"])["rules"], marshal(t, wantRules))
+}
+
+func TestGenerateExtraOutboundsWithoutSelection(t *testing.T) {
+	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"}]}`)
+	extra := json.RawMessage(`{"tag":"home_out","protocol":"socks","settings":{"servers":[{"address":"192.0.2.20","port":1080}]}}`)
+	result, err := Generate(baseline, Overlay{ExtraOutbounds: []json.RawMessage{extra}}, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(decodeArray(t, decodeObject(t, baseline)["outbounds"]), extra)
+	assertJSONEqual(t, decodeObject(t, result)["outbounds"], marshal(t, want))
+	withoutExtras, err := Generate(baseline, Overlay{ExtraOutbounds: []json.RawMessage{}}, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := Generate(baseline, Overlay{}, "v1")
+	if err != nil || !bytes.Equal(withoutExtras, original) {
+		t.Fatal("empty extra_outbounds changed previous output")
+	}
+}
+
+func TestGenerateRejectsUnsafeExtraOutbounds(t *testing.T) {
+	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"}]}`)
+	tests := []struct {
+		name     string
+		overlay  Overlay
+		contains string
+	}{
+		{"tag replaces baseline", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"direct","protocol":"blackhole"}`)}}, "duplicate outbound tag"},
+		{"duplicate added tag", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"freedom"}`), json.RawMessage(`{"tag":"home_out","protocol":"blackhole"}`)}}, "duplicate outbound tag"},
+		{"bad protocol", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"unsupported"}`)}}, "unsupported outbound protocol"},
+		{"host binding", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"freedom","streamSettings":{"sockopt":{"interface":"router-only"}}}`)}}, "interface binding"},
+		{"missing dependency", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks","proxySettings":{"tag":"missing"}}`)}}, "missing dependency"},
+		{"cycle", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks","proxySettings":{"tag":"home_transport"}}`), json.RawMessage(`{"tag":"home_transport","protocol":"socks","streamSettings":{"sockopt":{"dialerProxy":"home_out"}}}`)}}, "dependency cycle"},
+		{"unselected home route", Overlay{KeepOutbounds: []string{"direct"}, ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks"}`)}, PrependRules: []json.RawMessage{json.RawMessage(`{"ip":["10.20.30.0/24"],"outboundTag":"home_out"}`)}}, "missing or invalid outbound"},
+		{"missing home route", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks"}`)}, PrependRules: []json.RawMessage{json.RawMessage(`{"ip":["10.20.30.0/24"],"outboundTag":"absent"}`)}}, "missing or invalid outbound"},
+		{"malformed JSON", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{`)}}, "invalid JSON"},
+		{"null outbound", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`null`)}}, "expected JSON object"},
+		{"shadowed extra key", Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks","protocol":"freedom"}`)}}, "duplicate JSON object key"},
+		{"drop original default", Overlay{KeepOutbounds: []string{"home_out"}, ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"socks"}`)}}, "baseline first outbound would change default routing"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Generate(baseline, tc.overlay, "v1")
+			if err == nil || result != nil || !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("Generate returned result=%t, err=%v; want rejection containing %q", result != nil, err, tc.contains)
+			}
+		})
+	}
+	if _, err := Generate([]byte(`{"outbounds":[]}`), Overlay{ExtraOutbounds: []json.RawMessage{json.RawMessage(`{"tag":"home_out","protocol":"freedom"}`)}}, "v1"); err == nil {
+		t.Fatal("extra outbounds silently supplied a missing authoritative default")
+	}
+}
+
 func TestGenerateBalancerPreservesAllPrefixMatchesAndFallback(t *testing.T) {
 	baseline := `{
   "routing":{"rules":[{"network":"tcp,udp","balancerTag":"pool"}],"balancers":[{"tag":"pool","selector":["edge-"],"fallbackTag":"fallback","strategy":{"type":"roundRobin","settings":{}}}]},

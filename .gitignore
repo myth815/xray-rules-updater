@@ -1,4 +1,9 @@
 /runtime/
+/config/
+/config.json
+/baseline.json
+/overlay.json
+__pycache__/
 /publish/
 /dist/
 *.local.json
