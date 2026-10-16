@@ -6,10 +6,11 @@ A small, one-shot Go publisher for a home network using native Xray, MosDNS,
 RouterOS and OneXray. The runtime image contains only the static executable and
 CA certificates. It has no daemon, database, cron, management UI or proxy core.
 
-## v0.2 scope (in preparation)
+## Current capabilities
 
-The interface below is being prepared for v0.2.0. It does not claim that a
-production deployment, consumer reload or client update has passed acceptance.
+Release **v0.4.2** provides the publisher capabilities below. Optional host
+application is documented in [deploy/README.md](deploy/README.md); deployment
+readiness and client acceptance remain specific to each installation.
 
 - Resolves one GitHub release, then verifies both native DAT assets against that
   release's SHA256 digests. Explicit pinned HTTPS or local assets are also supported.
@@ -24,6 +25,11 @@ production deployment, consumer reload or client update has passed acceptance.
   and the default outbound. The subscription entry name includes its version.
 - Supports a strict read-only snapshot of disjoint native configuration modules,
   explicit client socket-field omissions and an exact legacy-ad-rule migration.
+- Derives declared domain predicates from exact outbound tags for tagged client
+  DNS servers and MosDNS exports, retaining native GEO references in client JSON.
+- Offers explicit opt-in OneXray FakeDNS adaptation with metadata-only recovery,
+  stale-address block guards and ordinary traffic dispatched inside the same Core.
+  Target-App compilation and network acceptance remain separate checks.
 - Publishes immutable versions, `current` and `previous` pointers, file hashes,
   counts and one overwritten `status.json`. Identical input skips regeneration.
 - Uses a process-lifetime lock, checks storage budgets and recovers interrupted
@@ -32,10 +38,11 @@ production deployment, consumer reload or client update has passed acceptance.
   different publication. Native verification and live health checks are separate
   one-shot modes; the host still applies or rolls back consumer configuration.
 
-**This release publishes candidates; it does not replace running Xray/MosDNS
-assets, restart services, activate CN bypass or apply a client configuration.**
-Those operations require separate target-core validation and host application
-checks. A successful publication does not claim any consumer loaded the files.
+**Publication produces candidates. Consumer application is an explicit host
+operation.** The optional host coordinator handles target-core validation,
+service application, live readiness and rollback separately. Client selection
+and activation still belong to the client. A successful publication alone does
+not prove that any consumer loaded the files or that CN bypass is active.
 
 ## Run
 
@@ -54,7 +61,7 @@ and complete coherent baseline edits before scheduling generation.
 docker run --rm --memory=192m --cpus=1 \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/publish:/publish" \
-  ghcr.io/myth815/xray-rules-updater:v0.2.0
+  ghcr.io/myth815/xray-rules-updater:v0.4.2
 ```
 
 Mount the publication into an existing Nginx instance read-only. Immutable
@@ -87,8 +94,8 @@ uncompressed layer against the original config's `diff_ids`; it does not change
 the executable or layer contents and is not included in the runtime image.
 
 ```sh
-docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.2.0
-docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.2.0
+docker pull --platform linux/arm64 ghcr.io/myth815/xray-rules-updater:v0.4.2
+docker save --platform linux/arm64 -o image.tar ghcr.io/myth815/xray-rules-updater:v0.4.2
 python3 tools/docker_save_for_routeros.py image.tar image-routeros.tar
 ```
 
@@ -136,9 +143,10 @@ distinguish transport/TLS/HTTP failures without logging URLs or credentials.
 
 ### Optional host application
 
-`deploy/routeros/update.rsc` is a parameterized host script body, not an automatic
-installer. `deploy/nginx/apply.sh` controls a small Nginx version include. Install
-and validate each step on the target RouterOS before enabling a scheduler.
+See [the host deployment instructions](deploy/README.md) for installation and
+configuration. `deploy/routeros/update.rsc` is a parameterized host script body;
+`deploy/nginx/apply.sh` controls a small Nginx version include. Install and
+validate each step on the target RouterOS before enabling a scheduler.
 
 Complete the initial migration separately with a real rollback snapshot:
 
