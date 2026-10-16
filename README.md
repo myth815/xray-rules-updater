@@ -264,6 +264,63 @@ unknown matchers and filename collisions fail publication. Exports share the
 128-file limit and existing file/publication budgets; repeated client DNS
 domain copies have an additional aggregate 4 MiB limit.
 
+### Optional OneXray FakeDNS adaptation
+
+`client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
+when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).
+Merge it into the existing overlay and replace the synthetic outbound and DNS
+tags. It requires a retained proxy outbound with pure baseline domain rules,
+an unchained `block` blackhole, one uniquely tagged dedicated DNS server already
+using `skipFallback: true`, and an ordinary DNS fallback. Its DNS outbound must
+already have exactly A/AAAA `hijack` followed by unconditional `direct`; its
+single `tunIn` TCP/UDP port-53 interception must be explicit. Unsupported or
+ambiguous graphs fail instead of being repaired.
+
+The adapter retains native domain/GEO predicates. It replaces only the named
+DNS server with a first, terminal FakeDNS server and adds pools
+`198.19.0.0/16` and `fc00:1::/64`, each with 8192 mappings. Routing starts with
+the existing DNS interception, then the declared business domain policy, then
+FakeDNS protocol and pool block guards, then ordinary `tunIn` dispatch. Other
+client and baseline rules keep their relative order. AI non-A/AAAA questions
+receive an empty successful answer before the DNS outbound's ordinary direct
+rule; this also suppresses AI HTTPS/SVCB hints and has a compatibility cost.
+Ordinary DNS questions and the baseline default outbound remain unchanged.
+Selecting an outbound tag does not prove its geographic exit; verify that
+separately. This feature does not send unknown traffic to a universal US exit.
+
+The generated `tunIn` recovers FakeDNS metadata without payload sniffing. An
+ordinary flow takes one additional dispatch inside the same Core through a
+generated loopback outbound, which performs the usual HTTP/TLS/QUIC sniffing.
+It creates no extra container or external listener. Performance has not been
+measured. Native loopback disables routing/handler DNS resolution on its second
+pass, so `IPIfNonMatch` requires an existing unconditional TCP/UDP catchall;
+`AsIs` is supported, and `IPOnDemand` is rejected. Every retained outbound's
+`targetStrategy` must be absent, empty or `AsIs`. Transport socket and freedom
+resolution strategies are retained. Nonempty DNS hosts, system-host lookup,
+global fallback disabling, other FakeDNS servers, reserved-tag collisions and
+balancer selectors that would acquire the generated loopback are rejected.
+
+Coverage requires the flow to use controlled FakeDNS, or to expose a domain
+that ordinary sniffing can recover. Application-owned DoH/DoT, hardcoded IPs,
+or an old real-IP cache combined with ECH/hidden SNI cannot be classified by
+this adapter and retain the original ordinary policy. The guards stop stale
+or unallocated fake-pool addresses before ordinary sniffing can relabel them;
+they do not identify unknown real addresses. This is not a claim that every
+possible AI flow has been identified.
+
+Import the complete JSON as a **provider-managed full configuration**, rather
+than projecting it into independent node entries. The fixed
+[OneXray v26.10.3 subscription reader](https://github.com/YuanDevTeam/OneXray/blob/5e9fbe94ef73fdd65afa25efb0347eda51812938/lib/service/servers/subscription/reader.dart)
+stores the complete Map, and its
+[provider runtime compiler](https://github.com/YuanDevTeam/OneXray/blob/5e9fbe94ef73fdd65afa25efb0347eda51812938/lib/service/connect/compiler.dart)
+keeps the explicit `fakedns` pools and loopback payload while applying platform
+fields. The generated minimal `tunIn` intentionally omits App-owned settings,
+such as the TUN name and MTU. It must pass the target App's platform compilation
+and validation. A direct Linux Core check of the uncompiled subscription does
+not establish that path. Local fixed-Core isolation and source-equivalent
+platform-field checks do not establish iOS, live-network or performance
+acceptance; those remain separate before enabling this optional adaptation.
+
 ### Application acknowledgement
 
 For host-managed application, a configuration fragment can use:

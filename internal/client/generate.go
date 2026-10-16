@@ -29,6 +29,7 @@ type Overlay struct {
 	PrependRules             []json.RawMessage   `json:"prepend_rules"`
 	DNS                      json.RawMessage     `json:"dns"`
 	DNSServersFromOutbounds  map[string]string   `json:"dns_servers_from_outbounds,omitempty"`
+	OneXrayFakeDNS           *OneXrayFakeDNS     `json:"one_xray_fake_dns,omitempty"`
 }
 
 type object map[string]json.RawMessage
@@ -44,8 +45,9 @@ type balancer struct {
 	deps []string
 }
 
-// Generate returns a full native configuration containing only dns, routing,
-// outbounds and policy. Platform-owned listeners and telemetry are omitted.
+// Generate returns a full native configuration containing dns, routing,
+// outbounds and policy. Server listeners and telemetry are omitted. The
+// explicit OneXrayFakeDNS adaptation can generate its own platform inbound.
 // This is a conservative structural adapter, not an Xray-core schema validator;
 // the candidate must still pass the target core's configuration validation.
 func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) {
@@ -234,6 +236,11 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 	top["outbounds"], err = json.Marshal(kept)
 	if err != nil {
 		return nil, fmt.Errorf("encode outbounds: %w", err)
+	}
+	if overlay.OneXrayFakeDNS != nil {
+		if err := adaptOneXrayFakeDNS(baseline, top, selected, byTag, balancers, *overlay.OneXrayFakeDNS); err != nil {
+			return nil, fmt.Errorf("one_xray_fake_dns: %w", err)
+		}
 	}
 	encoded, err := json.MarshalIndent(top, "", "  ")
 	if err != nil {

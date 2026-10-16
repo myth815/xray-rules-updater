@@ -1,0 +1,46 @@
+{
+  "client": {
+    "drop_inbound_rules": true,
+    "one_xray_fake_dns": {
+      "outbound_tag": "sample-egress",
+      "dns_server_tag": "sample-business-dns",
+      "dns_outbound_tag": "sample-mobile-dns"
+    },
+    "dns": {
+      "servers": [
+        {
+          "address": "tcp://192.0.2.53",
+          "tag": "sample-business-dns",
+          "domains": ["full:placeholder.invalid"],
+          "finalQuery": true,
+          "skipFallback": true
+        },
+        "1.1.1.1"
+      ]
+    },
+    "extra_outbounds": [
+      {
+        "tag": "sample-mobile-dns",
+        "protocol": "dns",
+        "settings": {
+          "rules": [
+            {"qType": "1,28", "action": "hijack"},
+            {"action": "direct"}
+          ]
+        },
+        "streamSettings": {
+          "sockopt": {"dialerProxy": "sample-egress"}
+        }
+      }
+    ],
+    "prepend_rules": [
+      {
+        "type": "field",
+        "inboundTag": ["tunIn"],
+        "network": "tcp,udp",
+        "port": "53",
+        "outboundTag": "sample-mobile-dns"
+      }
+    ]
+  }
+}
