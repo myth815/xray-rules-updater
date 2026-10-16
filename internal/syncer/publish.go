@@ -187,6 +187,9 @@ func publish(c Config, runID, version string, files map[string][]byte, m Manifes
 			return false, err
 		}
 	}
+	if _, err := checkApplyAck(c, existing, target); err != nil {
+		return false, err
+	}
 	if existing == target {
 		return false, nil
 	}
@@ -266,7 +269,7 @@ func publish(c Config, runID, version string, files map[string][]byte, m Manifes
 		return errors.As(err, &committed), err
 	}
 	// A pruning failure must not misreport a successfully committed pointer as unpublished.
-	_ = prune(root)
+	_ = pruneApplied(c)
 	return true, nil
 }
 func prepareRoot(c Config, runID string) (func(), error) {
@@ -331,9 +334,21 @@ func prepareRoot(c Config, runID string) (func(), error) {
 			}
 		}
 	}
-	if err := prune(c.PublishDir); err != nil {
+	current, err := pointer(c.PublishDir, "current")
+	if err != nil {
 		cleanup()
 		return nil, err
+	}
+	canPrune, err := checkApplyAck(c, current, "")
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if canPrune {
+		if err := pruneApplied(c); err != nil {
+			cleanup()
+			return nil, err
+		}
 	}
 	if c.ServeGroupID != nil {
 		if err := groupReadable(c.PublishDir, *c.ServeGroupID); err != nil {

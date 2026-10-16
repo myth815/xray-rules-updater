@@ -148,6 +148,110 @@ func TestGenerateExtraOutboundsWithoutSelection(t *testing.T) {
 	}
 }
 
+func TestGenerateExplicitSockoptOmissionsPreserveIdentityAndChain(t *testing.T) {
+	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"192.0.2.2","port":1080,"users":[{"user":"SYNTHETIC-USER","pass":"SYNTHETIC-PASSWORD"}]}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"serverName":"proxy.example.invalid"},"sockopt":{"mark":66,"interface":"router-only","tcpNoDelay":true,"dialerProxy":"hop","domainStrategy":"UseIPv4"}}},{"tag":"hop","protocol":"freedom"}]}`)
+	before := append([]byte(nil), baseline...)
+	if _, err := Generate(baseline, Overlay{}, "v1"); err == nil {
+		t.Fatal("default overlay accepted host-specific binding")
+	}
+	overlay := Overlay{KeepOutbounds: []string{"direct", "proxy"}, OutboundSockoptOmissions: map[string][]string{"proxy": {"mark", "interface", "tcpNoDelay"}}}
+	result, err := Generate(baseline, overlay, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, baseline) {
+		t.Fatal("authoritative baseline was mutated")
+	}
+	original := decodeArray(t, decodeObject(t, baseline)["outbounds"])
+	actual := decodeArray(t, decodeObject(t, result)["outbounds"])
+	if len(actual) != 3 {
+		t.Fatal("required dialerProxy dependency was lost")
+	}
+	assertJSONEqual(t, actual[0], original[0])
+	assertJSONEqual(t, actual[2], original[2])
+	wantProxy := decodeObject(t, original[1])
+	stream := decodeObject(t, wantProxy["streamSettings"])
+	stream["sockopt"] = json.RawMessage(`{"dialerProxy":"hop","domainStrategy":"UseIPv4"}`)
+	wantProxy["streamSettings"] = marshal(t, stream)
+	assertJSONEqual(t, actual[1], marshal(t, wantProxy))
+	// Explicitly absent platform fields are an idempotent omission, while
+	// removing the chain or resolution strategy remains forbidden.
+	second, err := Generate(result, overlay, "v1")
+	if err != nil || !bytes.Equal(second, result) {
+		t.Fatal("explicit client omissions were not idempotent")
+	}
+}
+
+func TestGenerateSockoptOmissionsFailClosed(t *testing.T) {
+	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"proxy","protocol":"socks","streamSettings":{"sockopt":{"mark":66,"interface":"router-only","dialerProxy":"direct"}}}]}`)
+	tests := []struct {
+		name     string
+		omit     map[string][]string
+		contains string
+	}{
+		{"chain cannot be removed", map[string][]string{"proxy": {"dialerProxy"}}, "not an approved"},
+		{"DNS semantics cannot be removed", map[string][]string{"proxy": {"domainStrategy"}}, "not an approved"},
+		{"unknown field", map[string][]string{"proxy": {"futureField"}}, "not an approved"},
+		{"unknown tag", map[string][]string{"missing": {"mark"}}, "specified outbound tag not found"},
+		{"wildcard tag", map[string][]string{"*": {"mark"}}, "specified outbound tag not found"},
+		{"empty tag", map[string][]string{"": {"mark"}}, "exact tag"},
+		{"empty list", map[string][]string{"proxy": {}}, "nonempty field list"},
+		{"duplicate field", map[string][]string{"proxy": {"mark", "mark"}}, "duplicate field"},
+		{"remaining binding", map[string][]string{"proxy": {"mark"}}, "interface binding"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Generate(baseline, Overlay{OutboundSockoptOmissions: tc.omit}, "v1")
+			if err == nil || result != nil || !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("Generate rejection = %v; want %q", err, tc.contains)
+			}
+		})
+	}
+}
+
+func TestGenerateExplicitLegacyAdMigrationPreservesOtherRules(t *testing.T) {
+	baseline := []byte(`{"routing":{"domainStrategy":"IPIfNonMatch","rules":[{"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block","ruleTag":"legacy-ad"},{"domain":["geosite:openai"],"network":"tcp","port":"443","outboundTag":"direct"},{"network":"tcp,udp","outboundTag":"direct"}]},"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}]}`)
+	original := append([]byte(nil), baseline...)
+	unchanged, err := Generate(baseline, Overlay{}, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, unchanged, baseline)
+	home := json.RawMessage(`{"ip":["10.20.30.15"],"port":"8096","outboundTag":"direct"}`)
+	result, err := Generate(baseline, Overlay{DropLegacyAdRule: true, PrependRules: []json.RawMessage{home}}, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, baseline) {
+		t.Fatal("legacy migration changed authoritative baseline")
+	}
+	want := decodeArray(t, decodeObject(t, decodeObject(t, baseline)["routing"])["rules"])
+	want = append([]json.RawMessage{home}, want[1:]...)
+	assertJSONEqual(t, decodeObject(t, decodeObject(t, result)["routing"])["rules"], marshal(t, want))
+}
+
+func TestGenerateLegacyAdMigrationRejectsDrift(t *testing.T) {
+	known := `{"domain":["geosite:category-ads-all"],"outboundTag":"block"}`
+	tests := []struct{ name, rules string }{
+		{"missing", `[{"network":"tcp,udp","outboundTag":"direct"}]`},
+		{"duplicate", `[` + known + `,` + known + `]`},
+		{"additional domains", `[{"domain":["geosite:category-ads-all","geosite:cn"],"outboundTag":"block"}]`},
+		{"additional AND condition", `[{"domain":["geosite:category-ads-all"],"network":"tcp","outboundTag":"block"}]`},
+		{"side effect", `[{"domain":["geosite:category-ads-all"],"outboundTag":"block","webhook":{"url":"https://example.invalid/hook"}}]`},
+		{"changed action", `[{"domain":["geosite:category-ads-all"],"outboundTag":"direct"}]`},
+		{"changed type", `[{"type":"future","domain":["geosite:category-ads-all"],"outboundTag":"block"}]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline := []byte(`{"routing":{"rules":` + tc.rules + `},"outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}]}`)
+			result, err := Generate(baseline, Overlay{DropLegacyAdRule: true}, "v1")
+			if err == nil || result != nil || !strings.Contains(err.Error(), "drop_legacy_ad_rule") {
+				t.Fatalf("unsafe legacy migration was not rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestGenerateRejectsUnsafeExtraOutbounds(t *testing.T) {
 	baseline := []byte(`{"outbounds":[{"tag":"direct","protocol":"freedom"}]}`)
 	tests := []struct {

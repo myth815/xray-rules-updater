@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/myth815/xray-rules-updater/internal/syncer"
+	"github.com/myth815/xray-rules-updater/internal/verify"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +21,8 @@ func main() {
 	runtime.GOMAXPROCS(1)
 	debug.SetMemoryLimit(96 << 20)
 	configPath := flag.String("config", "/config/config.json", "configuration file")
+	verifyPath := flag.String("verify-config", "", "native verification configuration file")
+	healthPath := flag.String("health-config", "", "live consumer health configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -28,6 +31,38 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if *healthPath != "" {
+		body, err := os.ReadFile(*healthPath)
+		if err != nil {
+			fail("health configuration read failed")
+		}
+		config, err := verify.LoadHealthConfig(body)
+		if err != nil {
+			fail("health configuration invalid")
+		}
+		summary, err := verify.Health(ctx, config)
+		_ = json.NewEncoder(os.Stdout).Encode(summary)
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if *verifyPath != "" {
+		body, err := os.ReadFile(*verifyPath)
+		if err != nil {
+			fail("verification configuration read failed")
+		}
+		config, err := verify.LoadConfig(body)
+		if err != nil {
+			fail("verification configuration invalid")
+		}
+		summary, err := verify.Run(ctx, config)
+		_ = json.NewEncoder(os.Stdout).Encode(summary)
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	body, err := os.ReadFile(*configPath)
 	if err != nil {
 		fail("configuration read failed")

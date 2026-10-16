@@ -76,7 +76,7 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	if e != nil {
 		return summary, e
 	}
-	baseline, e := readLimited(c.Baseline, 4<<20)
+	baseline, e := readBaseline(c)
 	if e != nil {
 		return summary, e
 	}
@@ -97,6 +97,9 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	summary.Version = version
 	current, e := pointer(c.PublishDir, "current")
 	if e != nil {
+		return summary, e
+	}
+	if _, e = checkApplyAck(c, current, "versions/"+version); e != nil {
 		return summary, e
 	}
 	if current == "versions/"+version {
@@ -177,7 +180,7 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	}
 	one = append(one, '\n')
 	// Detect a baseline edit during the run; never publish a mixed snapshot.
-	baselineAfter, e := readLimited(c.Baseline, 4<<20)
+	baselineAfter, e := readBaseline(c)
 	if e != nil || hash(baselineAfter) != baselineHash {
 		return summary, errors.New("baseline changed during run")
 	}
@@ -208,6 +211,10 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 }
 
 func errorCode(err error) string {
+	var apply *applyAckError
+	if errors.As(err, &apply) {
+		return apply.code
+	}
 	var source *sourceFailure
 	if errors.As(err, &source) {
 		return source.Code

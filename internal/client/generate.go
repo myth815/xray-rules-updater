@@ -20,12 +20,14 @@ import (
 // Name and the Generate version argument belong in the release manifest, not in
 // the native Xray configuration owned by the app.
 type Overlay struct {
-	Name             string            `json:"name"`
-	KeepOutbounds    []string          `json:"keep_outbounds"`
-	ExtraOutbounds   []json.RawMessage `json:"extra_outbounds"`
-	DropInboundRules bool              `json:"drop_inbound_rules"`
-	PrependRules     []json.RawMessage `json:"prepend_rules"`
-	DNS              json.RawMessage   `json:"dns"`
+	Name                     string              `json:"name"`
+	KeepOutbounds            []string            `json:"keep_outbounds"`
+	ExtraOutbounds           []json.RawMessage   `json:"extra_outbounds"`
+	OutboundSockoptOmissions map[string][]string `json:"outbound_sockopt_omissions"`
+	DropLegacyAdRule         bool                `json:"drop_legacy_ad_rule"`
+	DropInboundRules         bool                `json:"drop_inbound_rules"`
+	PrependRules             []json.RawMessage   `json:"prepend_rules"`
+	DNS                      json.RawMessage     `json:"dns"`
 }
 
 type object map[string]json.RawMessage
@@ -111,6 +113,10 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 			return nil, fmt.Errorf("encode combined outbounds: %w", err)
 		}
 	}
+	outboundJSON, err = omitOutboundSockopt(outboundJSON, overlay.OutboundSockoptOmissions)
+	if err != nil {
+		return nil, err
+	}
 	outs, byTag, err := readOutbounds(outboundJSON)
 	if err != nil {
 		return nil, err
@@ -144,6 +150,12 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 	var rules []json.RawMessage
 	if raw, ok := routing["rules"]; ok {
 		rules, err = readArray(raw, "routing.rules")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if overlay.DropLegacyAdRule {
+		rules, err = omitLegacyAdRule(rules)
 		if err != nil {
 			return nil, err
 		}
@@ -221,6 +233,161 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 		return nil, fmt.Errorf("encode client configuration: %w", err)
 	}
 	return append(encoded, '\n'), nil
+}
+
+// omitOutboundSockopt applies an explicit client-only omission before normal
+// validation. No wildcard tags or outbound replacements are supported.
+func omitOutboundSockopt(raw json.RawMessage, omissions map[string][]string) (json.RawMessage, error) {
+	if len(omissions) == 0 {
+		return raw, nil
+	}
+	allowed := map[string]bool{
+		"mark": true, "interface": true, "bindToDevice": true, "tproxy": true,
+		"tcpFastOpen": true, "tcpKeepAliveIdle": true, "tcpKeepAliveInterval": true,
+		"tcpMaxSeg": true, "tcpMptcp": true, "tcpNoDelay": true,
+		"tcpUserTimeout": true, "tcpcongestion": true,
+	}
+	tags := make([]string, 0, len(omissions))
+	for tag := range omissions {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	for _, tag := range tags {
+		if tag == "" || len(omissions[tag]) == 0 {
+			return nil, fmt.Errorf("outbound_sockopt_omissions: exact tag and nonempty field list required")
+		}
+		seen := map[string]bool{}
+		for _, field := range omissions[tag] {
+			if !allowed[field] {
+				return nil, fmt.Errorf("outbound_sockopt_omissions: field is not an approved platform omission; dialerProxy and routing semantics must be preserved")
+			}
+			if seen[field] {
+				return nil, fmt.Errorf("outbound_sockopt_omissions: duplicate field")
+			}
+			seen[field] = true
+		}
+	}
+	entries, err := readArray(raw, "outbounds")
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]bool{}
+	for i, raw := range entries {
+		where := fmt.Sprintf("outbounds[%d]", i)
+		obj, err := readObject(raw, where)
+		if err != nil {
+			return nil, err
+		}
+		tag, err := requiredString(obj["tag"], where+".tag")
+		if err != nil {
+			return nil, err
+		}
+		fields, selected := omissions[tag]
+		if !selected {
+			continue
+		}
+		found[tag] = true
+		streamJSON, present := obj["streamSettings"]
+		if !present {
+			continue
+		}
+		stream, err := readObject(streamJSON, where+".streamSettings")
+		if err != nil {
+			return nil, err
+		}
+		sockoptJSON, present := stream["sockopt"]
+		if !present {
+			continue
+		}
+		sockopt, err := readObject(sockoptJSON, where+".streamSettings.sockopt")
+		if err != nil {
+			return nil, err
+		}
+		for _, field := range fields {
+			delete(sockopt, field)
+		}
+		if len(sockopt) == 0 {
+			delete(stream, "sockopt")
+		} else {
+			stream["sockopt"], err = json.Marshal(sockopt)
+			if err != nil {
+				return nil, fmt.Errorf("encode adapted sockopt: %w", err)
+			}
+		}
+		obj["streamSettings"], err = json.Marshal(stream)
+		if err != nil {
+			return nil, fmt.Errorf("encode adapted stream settings: %w", err)
+		}
+		entries[i], err = json.Marshal(obj)
+		if err != nil {
+			return nil, fmt.Errorf("encode adapted outbound: %w", err)
+		}
+	}
+	for _, tag := range tags {
+		if !found[tag] {
+			return nil, fmt.Errorf("outbound_sockopt_omissions: specified outbound tag not found")
+		}
+	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		return nil, fmt.Errorf("encode adapted outbounds: %w", err)
+	}
+	return encoded, nil
+}
+
+// omitLegacyAdRule is deliberately narrower than a general rule filter. A
+// changed predicate, absent rule, or duplicated rule stops publication so the
+// caller must review its explicit migration request against the new baseline.
+func omitLegacyAdRule(rules []json.RawMessage) ([]json.RawMessage, error) {
+	result := make([]json.RawMessage, 0, len(rules))
+	removed := 0
+	for i, raw := range rules {
+		rule, err := readObject(raw, fmt.Sprintf("routing.rules[%d]", i))
+		if err != nil {
+			return nil, err
+		}
+		var domains []string
+		if json.Unmarshal(rule["domain"], &domains) != nil {
+			result = append(result, raw)
+			continue
+		}
+		containsAds := false
+		for _, domain := range domains {
+			containsAds = containsAds || domain == "geosite:category-ads-all"
+		}
+		if !containsAds {
+			result = append(result, raw)
+			continue
+		}
+		if len(domains) != 1 {
+			return nil, fmt.Errorf("drop_legacy_ad_rule: legacy ad predicate changed; refusing to remove additional domain conditions")
+		}
+		target, err := requiredString(rule["outboundTag"], "legacy ad rule outboundTag")
+		if err != nil || target != "block" {
+			return nil, fmt.Errorf("drop_legacy_ad_rule: legacy ad rule target changed")
+		}
+		for _, key := range sortedKeys(rule) {
+			switch key {
+			case "domain", "outboundTag":
+			case "type":
+				kind, err := requiredString(rule[key], "legacy ad rule type")
+				if err != nil || kind != "field" {
+					return nil, fmt.Errorf("drop_legacy_ad_rule: legacy ad rule type changed")
+				}
+			case "ruleTag":
+				if _, err := optionalString(rule[key], "legacy ad rule ruleTag"); err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("drop_legacy_ad_rule: legacy ad rule has additional conditions or effects")
+			}
+		}
+		removed++
+	}
+	if removed != 1 {
+		return nil, fmt.Errorf("drop_legacy_ad_rule: expected exactly one known legacy ad rule")
+	}
+	return result, nil
 }
 
 func readOutbounds(raw json.RawMessage) ([]outbound, map[string]outbound, error) {

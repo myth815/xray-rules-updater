@@ -25,20 +25,24 @@ type Source struct {
 	GeoSite    Asset  `json:"geosite,omitempty"`
 }
 type Config struct {
-	GeneratorVersion  string            `json:"-"`
-	SchemaVersion     int               `json:"schema_version"`
-	Source            Source            `json:"source"`
-	Baseline          string            `json:"baseline"`
-	Client            client.Overlay    `json:"client"`
-	Sites             map[string]string `json:"sites"`
-	IPs               map[string]string `json:"ips"`
-	RouterOSCandidate bool              `json:"routeros_candidate"`
-	PublishDir        string            `json:"publish_dir"`
-	BudgetBytes       int64             `json:"budget_bytes"`
-	MinFreeBytes      int64             `json:"min_free_bytes"`
-	MaxAssetBytes     int64             `json:"max_asset_bytes"`
-	TimeoutSeconds    int               `json:"timeout_seconds"`
-	ServeGroupID      *int              `json:"serve_group_id,omitempty"`
+	GeneratorVersion     string            `json:"-"`
+	SchemaVersion        int               `json:"schema_version"`
+	Source               Source            `json:"source"`
+	Baseline             string            `json:"baseline"`
+	BaselineDirectory    string            `json:"baseline_directory,omitempty"`
+	RequireApplyAck      bool              `json:"require_apply_ack,omitempty"`
+	ApplyAckPath         string            `json:"apply_ack_path,omitempty"`
+	ApplyTransactionPath string            `json:"apply_transaction_path,omitempty"`
+	Client               client.Overlay    `json:"client"`
+	Sites                map[string]string `json:"sites"`
+	IPs                  map[string]string `json:"ips"`
+	RouterOSCandidate    bool              `json:"routeros_candidate"`
+	PublishDir           string            `json:"publish_dir"`
+	BudgetBytes          int64             `json:"budget_bytes"`
+	MinFreeBytes         int64             `json:"min_free_bytes"`
+	MaxAssetBytes        int64             `json:"max_asset_bytes"`
+	TimeoutSeconds       int               `json:"timeout_seconds"`
+	ServeGroupID         *int              `json:"serve_group_id,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -66,7 +70,18 @@ func LoadConfig(data []byte, base string) (Config, error) {
 		}
 		return p
 	}
-	c.Baseline = absolute(c.Baseline)
+	if c.Baseline != "" {
+		c.Baseline = absolute(c.Baseline)
+	}
+	if c.BaselineDirectory != "" {
+		c.BaselineDirectory = absolute(c.BaselineDirectory)
+	}
+	if c.ApplyAckPath != "" {
+		c.ApplyAckPath = absolute(c.ApplyAckPath)
+	}
+	if c.ApplyTransactionPath != "" {
+		c.ApplyTransactionPath = absolute(c.ApplyTransactionPath)
+	}
 	c.PublishDir = absolute(c.PublishDir)
 	if c.Source.GeoIP.Path != "" {
 		c.Source.GeoIP.Path = absolute(c.Source.GeoIP.Path)
@@ -83,8 +98,21 @@ func (c *Config) validate() error {
 	if c.SchemaVersion != 1 {
 		return errors.New("unsupported configuration schema")
 	}
-	if c.Baseline == "" || c.PublishDir == "" {
-		return errors.New("baseline and publish_dir are required")
+	if (c.Baseline == "") == (c.BaselineDirectory == "") || c.PublishDir == "" {
+		return errors.New("exactly one baseline or baseline_directory, and publish_dir are required")
+	}
+	if c.RequireApplyAck {
+		if c.ApplyAckPath == "" {
+			c.ApplyAckPath = "applied.json"
+		}
+		if c.ApplyTransactionPath == "" {
+			c.ApplyTransactionPath = filepath.Join(filepath.Dir(c.ApplyAckPath), "transaction.json")
+		}
+		if filepath.Clean(c.ApplyAckPath) == filepath.Clean(c.ApplyTransactionPath) {
+			return errors.New("apply acknowledgement and transaction paths must differ")
+		}
+	} else if c.ApplyAckPath != "" || c.ApplyTransactionPath != "" {
+		return errors.New("apply state paths require require_apply_ack")
 	}
 	if c.BudgetBytes == 0 {
 		c.BudgetBytes = 160 << 20
