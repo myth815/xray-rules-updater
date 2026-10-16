@@ -61,6 +61,11 @@ switches Nginx's active include. It checks the stable manifest before writing th
 acknowledgement. While the journal exists, the producer cannot advance or prune
 rollback data, including the acknowledgement-to-commit window.
 
+Nginx reload is asynchronous. The host waits up to 20 seconds for the HTTPS
+manifest to serve the desired version, allowing only a previous worker's 404 or
+older valid version during that window. TLS verification stays enabled; DNS,
+transport, other HTTP and malformed metadata errors fail immediately.
+
 An interrupted transaction is resolved before the next generation. Recovery
 uses the actual saved environment, MosDNS data and acknowledgement. On the first
 application, the original assets are the rollback target; no previous publication

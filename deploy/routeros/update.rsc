@@ -189,10 +189,33 @@
 }
 :global RUXCheckSubscription do={
     :local c $1; :local version $2;
-    :local result [/tool fetch url=($c->"subscription_manifest_url") check-certificate=yes output=user as-value];
-    :if (($result->"status") != "finished") do={ :error "rules subscription request failed"; }
-    :local manifest [:deserialize from=json value=($result->"data") options=json.no-string-conversion];
-    :if (($manifest->"version") != $version) do={ :error "rules subscription still serves a different version"; }
+    :if ([:typeof $version] != "str") do={ :error "rules subscription desired version is invalid"; }
+    :if (!($version ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules subscription desired version is invalid"; }
+    # nginx -s reload returns before new workers serve the include. This is a
+    # bounded metadata readiness barrier, not a retry of a media/business probe.
+    :local deadline ([:timestamp] + 20s);
+    :while (([:timestamp] + 2s) < $deadline) do={
+        :local result ""; :local awaitingWorker false;
+        :onerror requestError in={
+            :set result [/tool fetch url=($c->"subscription_manifest_url") check-certificate=yes duration=2s idle-timeout=1s output=user as-value];
+        } do={
+            # Only the previous UNAPPLIED worker's 404 is a readiness state.
+            # TLS, DNS, transport and other HTTP failures stay failures.
+            :if ([:typeof [:find $requestError "Status 404"]] != "num") do={ :error $requestError; }
+            :set awaitingWorker true;
+        }
+        :if (!$awaitingWorker) do={
+            :if (($result->"status") != "finished") do={ :error "rules subscription request failed"; }
+            :local manifest [:deserialize from=json value=($result->"data") options=json.no-string-conversion];
+            :if ([:typeof $manifest] != "array") do={ :error "rules subscription metadata is invalid"; }
+            :local observed ($manifest->"version");
+            :if ([:typeof $observed] != "str") do={ :error "rules subscription metadata version is invalid"; }
+            :if (!($observed ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\$")) do={ :error "rules subscription metadata version is invalid"; }
+            :if ($observed = $version) do={ :return true; }
+        }
+        :delay 200ms;
+    }
+    :error "rules subscription desired version did not become ready within 20 seconds";
 }
 :global RUXValidateJournal do={
     :local journal $1;
