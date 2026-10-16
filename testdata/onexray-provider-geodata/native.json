@@ -1,0 +1,76 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "address": "1.1.1.1",
+        "domains": [
+          "ext:home_geosite_bfb45fb13bff9a0bc9e1f4f8984c83e190932cb602c0b71c7c64619c9475ff49.dat:cn"
+        ]
+      },
+      "8.8.8.8"
+    ]
+  },
+  "name": "Contract / contract-v1-81f174d6ff69",
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "usa-ai",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "node.example.invalid",
+            "port": 443,
+            "users": [
+              {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "policy": {
+    "levels": {
+      "0": {
+        "bufferSize": 4
+      }
+    }
+  },
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "domain": [
+          "ext:home_geosite_bfb45fb13bff9a0bc9e1f4f8984c83e190932cb602c0b71c7c64619c9475ff49.dat:ai"
+        ],
+        "outboundTag": "usa-ai",
+        "type": "field"
+      },
+      {
+        "domain": [
+          "ext:home_geosite_bfb45fb13bff9a0bc9e1f4f8984c83e190932cb602c0b71c7c64619c9475ff49.dat:cn"
+        ],
+        "outboundTag": "direct",
+        "type": "field"
+      },
+      {
+        "ip": [
+          "ext:home_geoip_39bec8f71be0952e52edb91fbc96d18b95567bfb5d46db98d51375f1a6634a31.dat:cn"
+        ],
+        "outboundTag": "direct",
+        "type": "field"
+      },
+      {
+        "network": "tcp,udp",
+        "outboundTag": "direct",
+        "type": "field"
+      }
+    ]
+  }
+}

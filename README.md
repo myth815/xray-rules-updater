@@ -438,6 +438,36 @@ client selection are distinct states; none alone proves the others.
   import the missing DAT links from `onexray-geodata.txt` before refreshing the
   full JSON. Automatic subscription dependency installation requires an upstream
   app change and is not implemented by publishing these files.
+- Patched-App-only provider metadata is a separate, default-off opt-in:
+  `one_xray_provider_geo_metadata: true` requires `one_xray_versioned_geo: true`
+  and `client_asset_base_url`. It adds raw `geodata.assets` entries with exactly
+  `file` and `url` for the DATs actually referenced by native `ext:` selectors,
+  using OneXray's existing asset shape. Names contain the full content SHA256;
+  the patched app must derive that expected digest and verify actual bytes on
+  download, reuse and every refresh path. `manifest.client_assets` also retains
+  explicit SHA256 values. URLs point to the original
+  `/versions/<policy-version>/geoip.dat` or `geosite.dat`. No DAT copies are made.
+  Before enabling this flag, install the restricted versioned-DAT serving
+  include and validate these URLs as described in [deployment](deploy/README.md);
+  the stable current-file endpoints alone do not serve immutable version URLs.
+  A policy-only update changes URLs while retaining the same file names and
+  digests, allowing the patched client to verify and reuse installed bytes.
+  No GEO references means no dependency metadata. Node identities, rule order,
+  native selectors and integer values retain their native meaning.
+  **The validated official OneXray does not implement this metadata contract.**
+  Keep this flag off until its provider-managed subscription reader installs
+  and verifies these dependencies before native validation and saves dependency
+  metadata and the new config together. The client also needs bounded asset
+  retention that protects saved configs, the selected profile and the actual
+  active/restart runtime. Hash-named files otherwise accumulate after refreshes;
+  old registered source URLs eventually return 404 when server versions expire.
+  Publisher retention does not clean up a phone's installed DATs.
+  This option only prepares server output;
+  it does not patch the app or prove an iOS update has completed.
+  Synthetic producer/Dart fixtures are in
+  [`testdata/onexray-provider-geodata`](testdata/onexray-provider-geodata/README.md).
+  Their native validation preparation removes only `geodata`; running Core's
+  config check does not validate the app's download or transaction behavior.
 - The storage budget counts retained publications plus the candidate; free-space
   reserve is additional. Defaults: 160 MiB publication budget, 64 MiB disk reserve,
   40 MiB per DAT, 300 seconds. Go CPU parallelism is limited to one, with a 96 MiB

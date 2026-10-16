@@ -90,13 +90,14 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		return summary, errors.New("baseline domain policy validation failed")
 	}
 	policy, _ := json.Marshal(struct {
-		Client       client.Overlay
-		Sites, IPs   map[string]string
-		RouterOS     bool
-		DomainSets   map[string]string
-		VersionedGEO bool
-		AssetBaseURL string
-	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds, c.OneXrayVersionedGEO, c.ClientAssetBaseURL})
+		Client              client.Overlay
+		Sites, IPs          map[string]string
+		RouterOS            bool
+		DomainSets          map[string]string
+		VersionedGEO        bool
+		AssetBaseURL        string
+		ProviderGEOMetadata bool `json:",omitempty"`
+	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds, c.OneXrayVersionedGEO, c.ClientAssetBaseURL, c.OneXrayProviderGEOMetadata})
 	policyHash := hash(policy)
 	identity, _ := json.Marshal([]string{"format-v1", c.GeneratorVersion, source.ReleaseID, strings.ToLower(source.GeoIP.SHA256), strings.ToLower(source.GeoSite.SHA256), baselineHash, policyHash})
 	// Keep IDs short enough for RouterOS list names as well as immutable paths.

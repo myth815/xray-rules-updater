@@ -25,6 +25,24 @@ var managedGeoCode = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_!.-]*$`)
 // are never searched or rewritten. Existing ext references must already name
 // the corresponding managed asset, making a second binding idempotent.
 func BindNativeGeoAssets(raw []byte, geoipName, geositeName string) ([]byte, error) {
+	bound, _, err := BindNativeGeoAssetsWithReferences(raw, geoipName, geositeName)
+	return bound, err
+}
+
+// BindNativeGeoAssetsWithReferences also returns the exact managed DAT
+// dependencies, keyed by filename with native type "ip" or "domain". Only
+// supported GEO-bearing policy fields count; credentials and metadata strings
+// never create a dependency. The encoded policy is identical to the basic API.
+func BindNativeGeoAssetsWithReferences(raw []byte, geoipName, geositeName string) ([]byte, map[string]string, error) {
+	refs := make(map[string]string)
+	bound, err := bindNativeGeoAssets(raw, geoipName, geositeName, refs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bound, refs, nil
+}
+
+func bindNativeGeoAssets(raw []byte, geoipName, geositeName string, refs map[string]string) ([]byte, error) {
 	if !managedGeoIPName.MatchString(geoipName) || !managedGeoSiteName.MatchString(geositeName) {
 		return nil, fmt.Errorf("managed GEO: filenames must use home_geoip_/home_geosite_ plus full lowercase SHA256 and .dat")
 	}
@@ -50,7 +68,7 @@ func BindNativeGeoAssets(raw []byte, geoipName, geositeName string) ([]byte, err
 				}
 				for _, field := range []string{"domain", "ip"} {
 					if raw, ok := rule[field]; ok {
-						rule[field], err = bindManagedGeoList(raw, field == "ip", geoipName, geositeName, where+"."+field)
+						rule[field], err = bindManagedGeoList(raw, field == "ip", geoipName, geositeName, where+"."+field, refs)
 						if err != nil {
 							return nil, err
 						}
@@ -100,7 +118,7 @@ func BindNativeGeoAssets(raw []byte, geoipName, geositeName string) ([]byte, err
 					return nil, err
 				}
 				if raw, ok := server["domains"]; ok {
-					server["domains"], err = bindManagedGeoList(raw, false, geoipName, geositeName, where+".domains")
+					server["domains"], err = bindManagedGeoList(raw, false, geoipName, geositeName, where+".domains", refs)
 					if err != nil {
 						return nil, err
 					}
@@ -128,7 +146,7 @@ func BindNativeGeoAssets(raw []byte, geoipName, geositeName string) ([]byte, err
 	return append(encoded, '\n'), nil
 }
 
-func bindManagedGeoList(raw json.RawMessage, ip bool, geoipName, geositeName, where string) (json.RawMessage, error) {
+func bindManagedGeoList(raw json.RawMessage, ip bool, geoipName, geositeName, where string, refs map[string]string) (json.RawMessage, error) {
 	return mapManagedGeoList(raw, where, func(value string) (string, error) {
 		prefix := ""
 		if ip {
@@ -156,6 +174,11 @@ func bindManagedGeoList(raw json.RawMessage, ip bool, geoipName, geositeName, wh
 		} else if err := geodata.ValidateDomainExpressions([]string{"geosite:" + selector}); err != nil {
 			return "", fmt.Errorf("%s: invalid GeoSite selector", where)
 		}
+		kind := "domain"
+		if ip {
+			kind = "ip"
+		}
+		refs[name] = kind
 		return prefix + "ext:" + name + ":" + selector, nil
 	})
 }

@@ -213,6 +213,32 @@ location = /geosite.dat { alias /rules/versions/$rules_version/geosite.dat; }
 location = /manifest.json { alias /rules/versions/$rules_version/manifest.json; }
 ```
 
+Before enabling versioned client GEO or provider subscription metadata, also
+copy `nginx/versioned-assets.conf` into the stable Nginx configuration directory
+and include it **inside the same private server block**:
+
+```nginx
+include /etc/nginx/rules/versioned-assets.conf;
+```
+
+The current-version routes above do not serve the immutable URLs generated for
+the client. The additional route serves only
+`/versions/<identifier>/geoip.dat` and `geosite.dat`, inherits the server's access
+policy, rejects symlinks and does not expose configs or staging directories.
+Its version header names the requested version rather than the current one.
+Retained files remain readable; a pruned version returns 404. Validate both
+current and previous DAT URLs and compare their downloaded SHA256 with the
+corresponding manifest before enabling client metadata. Keep the publisher
+mount read-only and do not replace this allowlist with a directory-wide alias.
+
+`nginx/probe_versioned_assets.py` is an opt-in HTTP integration probe for an
+isolated loopback fixture; it is separate from the default unit tests. Its
+fixture uses `test-v1` with the script's two `BODIES`, `test-v0` with `OLD_BODY`,
+a file and a directory symlink to an outside sentinel, and a server ACL that
+allows only 127.0.0.1. Set `VERSIONED_ASSET_TEST_URL=http://127.0.0.1:8080` inside
+that isolated network to check bytes, headers, ranges, access policy, allowlist
+and symlink denial. Never point this synthetic fixture probe at production.
+
 Apply the intended access policy: the complete client configuration contains
 proxy credentials. The helper does not add authentication or expose a port.
 Commands are `activate VERSION TOKEN REQUEST_ID`, `restore TOKEN REQUEST_ID` and

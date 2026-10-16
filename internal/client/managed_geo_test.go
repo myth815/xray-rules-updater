@@ -122,3 +122,38 @@ func TestBindNativeGeoAssetsLeavesNonGEOFieldsAndShapeAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBindNativeGeoAssetsReportsOnlyTypedPolicyReferences(t *testing.T) {
+	for _, test := range []struct {
+		name, raw string
+		want      map[string]string
+	}{
+		{"domain only", `{"routing":{"rules":[{"domain":["geosite:cn","geosite:cn"]}]}}`, map[string]string{testManagedGeoSite: "domain"}},
+		{"DNS only", `{"dns":{"servers":[{"address":"1.1.1.1","domains":["geosite:cn"]}]}}`, map[string]string{testManagedGeoSite: "domain"}},
+		{"IP only", `{"routing":{"rules":[{"ip":["geoip:!cn","!geoip:private"]}]}}`, map[string]string{testManagedGeoIP: "ip"}},
+		{"both", `{"routing":{"rules":[{"domain":["geosite:cn"],"ip":["geoip:cn"]}]}}`, map[string]string{testManagedGeoIP: "ip", testManagedGeoSite: "domain"}},
+		{"none", `{"routing":{"rules":[{"domain":["domain:cn.example"],"ip":[]}]}}`, map[string]string{}},
+		{"credentials excluded", `{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"node.example","users":[{"pass":"ext:` + testManagedGeoIP + `:cn"}]}]}}]}`, map[string]string{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bound, refs, err := BindNativeGeoAssetsWithReferences([]byte(test.raw), testManagedGeoIP, testManagedGeoSite)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := json.Marshal(refs)
+			want, _ := json.Marshal(test.want)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("wrong actual dependencies: %s != %s", got, want)
+			}
+			basic, err := BindNativeGeoAssets([]byte(test.raw), testManagedGeoIP, testManagedGeoSite)
+			if err != nil || !bytes.Equal(bound, basic) {
+				t.Fatal("reference reporting changed native policy encoding")
+			}
+			_, again, err := BindNativeGeoAssetsWithReferences(bound, testManagedGeoIP, testManagedGeoSite)
+			reencoded, _ := json.Marshal(again)
+			if err != nil || !bytes.Equal(got, reencoded) {
+				t.Fatal("already-bound references changed dependencies")
+			}
+		})
+	}
+}

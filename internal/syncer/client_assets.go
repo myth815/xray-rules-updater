@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"github.com/myth815/xray-rules-updater/internal/client"
 	"net/url"
@@ -44,6 +45,9 @@ func clientTransfer(raw, links []byte, v string, limit int64) ([]byte, []byte, e
 
 func validateClientAssetConfig(c Config) error {
 	if !c.OneXrayVersionedGEO {
+		if c.OneXrayProviderGEOMetadata {
+			return errors.New("OneXray provider GEO metadata requires versioned GEO")
+		}
 		if c.ClientAssetBaseURL != "" {
 			return errors.New("client asset origin requires versioned GEO")
 		}
@@ -57,15 +61,18 @@ func validateClientAssetConfig(c Config) error {
 }
 
 func bindClientAssets(c Config, v string, ip, site, raw []byte) ([]byte, map[string]ClientAsset, []byte, error) {
-	if !c.OneXrayVersionedGEO {
-		return raw, nil, nil, nil
-	}
 	if e := validateClientAssetConfig(c); e != nil {
 		return nil, nil, nil, e
 	}
+	if !c.OneXrayVersionedGEO {
+		return raw, nil, nil, nil
+	}
+	if !identifier.MatchString(v) || v == "latest" {
+		return nil, nil, nil, errors.New("versioned client GEO requires an immutable publication version")
+	}
 	ipHash, siteHash := hash(ip), hash(site)
 	ipName, siteName := "home_geoip_"+ipHash+".dat", "home_geosite_"+siteHash+".dat"
-	one, e := client.BindNativeGeoAssets(raw, ipName, siteName)
+	one, referenced, e := client.BindNativeGeoAssetsWithReferences(raw, ipName, siteName)
 	if e != nil {
 		return nil, nil, nil, e
 	}
@@ -74,12 +81,67 @@ func bindClientAssets(c Config, v string, ip, site, raw []byte) ([]byte, map[str
 		"geoip.dat":   {Name: ipName, Type: "ip", URL: origin + "/versions/" + v + "/geoip.dat", SHA256: ipHash, Bytes: int64(len(ip))},
 		"geosite.dat": {Name: siteName, Type: "domain", URL: origin + "/versions/" + v + "/geosite.dat", SHA256: siteHash, Bytes: int64(len(site))},
 	}
+	// Existing manual transfers keep their output unchanged. The patched-App
+	// subscription contract forbids unused declarations, so its explicit opt-in
+	// publishes metadata and import links only for actual typed ext: references.
+	if c.OneXrayProviderGEOMetadata {
+		for key, asset := range assets {
+			if referenced[asset.Name] != asset.Type {
+				delete(assets, key)
+			}
+		}
+		one, e = attachProviderGeoMetadata(one, assets)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+	}
 	var links strings.Builder
 	for _, key := range []string{"geoip.dat", "geosite.dat"} {
-		a := assets[key]
+		a, exists := assets[key]
+		if !exists {
+			continue
+		}
 		u := url.URL{Scheme: "onexray", Host: "onexray.com", Path: "/dat/add", RawQuery: url.Values{"type": {a.Type}, "url": {a.URL}}.Encode(), Fragment: a.Name}
 		links.WriteString(u.String())
 		links.WriteByte('\n')
 	}
 	return one, assets, []byte(links.String()), nil
+}
+
+// This is provider metadata for an opt-in OneXray adapter, not Xray-core
+// configuration. Official clients without that adapter must not enable it.
+// Keep RawMessage values intact so adding metadata cannot round policy numbers
+// or alter credentials, routing expressions or outbound order.
+func attachProviderGeoMetadata(raw []byte, assets map[string]ClientAsset) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil || top == nil {
+		return nil, errors.New("invalid native client for provider metadata")
+	}
+	if _, exists := top["geodata"]; exists {
+		return nil, errors.New("provider GEO metadata already present")
+	}
+	if len(assets) == 0 {
+		return raw, nil
+	}
+	type asset struct {
+		File string `json:"file"`
+		URL  string `json:"url"`
+	}
+	items := make([]asset, 0, len(assets))
+	for _, key := range []string{"geoip.dat", "geosite.dat"} {
+		if a, exists := assets[key]; exists {
+			items = append(items, asset{a.Name, a.URL})
+		}
+	}
+	if len(items) != len(assets) {
+		return nil, errors.New("unknown provider GEO asset")
+	}
+	top["geodata"], _ = json.Marshal(struct {
+		Assets []asset `json:"assets"`
+	}{items})
+	encoded, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		return nil, errors.New("encode provider GEO metadata failed")
+	}
+	return append(encoded, '\n'), nil
 }

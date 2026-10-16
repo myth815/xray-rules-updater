@@ -25,27 +25,28 @@ type Source struct {
 	GeoSite    Asset  `json:"geosite,omitempty"`
 }
 type Config struct {
-	GeneratorVersion        string            `json:"-"`
-	SchemaVersion           int               `json:"schema_version"`
-	Source                  Source            `json:"source"`
-	Baseline                string            `json:"baseline"`
-	BaselineDirectory       string            `json:"baseline_directory,omitempty"`
-	RequireApplyAck         bool              `json:"require_apply_ack,omitempty"`
-	ApplyAckPath            string            `json:"apply_ack_path,omitempty"`
-	ApplyTransactionPath    string            `json:"apply_transaction_path,omitempty"`
-	Client                  client.Overlay    `json:"client"`
-	OneXrayVersionedGEO     bool              `json:"one_xray_versioned_geo,omitempty"`
-	ClientAssetBaseURL      string            `json:"client_asset_base_url,omitempty"`
-	Sites                   map[string]string `json:"sites"`
-	IPs                     map[string]string `json:"ips"`
-	DomainSetsFromOutbounds map[string]string `json:"domain_sets_from_outbounds,omitempty"`
-	RouterOSCandidate       bool              `json:"routeros_candidate"`
-	PublishDir              string            `json:"publish_dir"`
-	BudgetBytes             int64             `json:"budget_bytes"`
-	MinFreeBytes            int64             `json:"min_free_bytes"`
-	MaxAssetBytes           int64             `json:"max_asset_bytes"`
-	TimeoutSeconds          int               `json:"timeout_seconds"`
-	ServeGroupID            *int              `json:"serve_group_id,omitempty"`
+	GeneratorVersion           string            `json:"-"`
+	SchemaVersion              int               `json:"schema_version"`
+	Source                     Source            `json:"source"`
+	Baseline                   string            `json:"baseline"`
+	BaselineDirectory          string            `json:"baseline_directory,omitempty"`
+	RequireApplyAck            bool              `json:"require_apply_ack,omitempty"`
+	ApplyAckPath               string            `json:"apply_ack_path,omitempty"`
+	ApplyTransactionPath       string            `json:"apply_transaction_path,omitempty"`
+	Client                     client.Overlay    `json:"client"`
+	OneXrayVersionedGEO        bool              `json:"one_xray_versioned_geo,omitempty"`
+	OneXrayProviderGEOMetadata bool              `json:"one_xray_provider_geo_metadata,omitempty"`
+	ClientAssetBaseURL         string            `json:"client_asset_base_url,omitempty"`
+	Sites                      map[string]string `json:"sites"`
+	IPs                        map[string]string `json:"ips"`
+	DomainSetsFromOutbounds    map[string]string `json:"domain_sets_from_outbounds,omitempty"`
+	RouterOSCandidate          bool              `json:"routeros_candidate"`
+	PublishDir                 string            `json:"publish_dir"`
+	BudgetBytes                int64             `json:"budget_bytes"`
+	MinFreeBytes               int64             `json:"min_free_bytes"`
+	MaxAssetBytes              int64             `json:"max_asset_bytes"`
+	TimeoutSeconds             int               `json:"timeout_seconds"`
+	ServeGroupID               *int              `json:"serve_group_id,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)

@@ -1,0 +1,85 @@
+{
+  "release_id": "contract-v1",
+  "generator_version": "contract-generator-v1",
+  "client_asset_base_url": "https://rules.example.invalid",
+  "geoip_base64": "Cg4KAkNOEggKBAEAAQAQGA==",
+  "geosite_base64": "ChQKAkNOEg4IAhIKZXhhbXBsZS5jbgogCgJBSRIaCAISFmFwaS5haS5leGFtcGxlLmludmFsaWQ=",
+  "baseline": {
+    "dns": {
+      "servers": [
+        {
+          "address": "1.1.1.1",
+          "domains": [
+            "geosite:cn"
+          ]
+        },
+        "8.8.8.8"
+      ]
+    },
+    "outbounds": [
+      {
+        "tag": "direct",
+        "protocol": "freedom"
+      },
+      {
+        "tag": "usa-ai",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "node.example.invalid",
+              "port": 443,
+              "users": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000001",
+                  "encryption": "none"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "routing": {
+      "domainStrategy": "IPIfNonMatch",
+      "rules": [
+        {
+          "type": "field",
+          "domain": [
+            "geosite:ai"
+          ],
+          "outboundTag": "usa-ai"
+        },
+        {
+          "type": "field",
+          "domain": [
+            "geosite:cn"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "ip": [
+            "geoip:cn"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "network": "tcp,udp",
+          "outboundTag": "direct"
+        }
+      ]
+    },
+    "policy": {
+      "levels": {
+        "0": {
+          "bufferSize": 4
+        }
+      }
+    }
+  },
+  "client": {
+    "name": "Contract"
+  }
+}
