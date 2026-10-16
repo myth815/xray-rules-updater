@@ -249,7 +249,12 @@
 
     :local manifest [$RUXReadCurrent $settings];
     :local applied [$RUXReadJSON $ackPath false]; :local oldVersion "";
-    :if ([:typeof $applied] = "array") do={ :set oldVersion ($applied->"version"); }
+    :if ([:typeof $applied] = "array") do={
+        :local acknowledgedVersion ($applied->"version");
+        :if ([:typeof $acknowledgedVersion] != "str") do={ :error "rules previous acknowledgement version is invalid"; }
+        :if (!($acknowledgedVersion ~ "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) do={ :error "rules previous acknowledgement version is invalid"; }
+        :set oldVersion $acknowledgedVersion;
+    }
     :if ([:typeof $manifest] = "array") do={ :set current ($manifest->"version"); }
     :if (($current = "") || ($current = $oldVersion)) do={
         :set phase "generate";
@@ -279,6 +284,7 @@
         :local oldAck ""; :local hadAck false;
         :if ([:typeof $applied] = "array") do={ :set hadAck true; :set oldAck [/file get $ackPath contents]; }
         :local journal {"run_id"=$token;"desired_version"=$current;"old_applied_version"=$oldVersion;"old_asset_present"=$hadAsset;"old_asset_value"=$oldAsset;"old_mosdns_data"=$oldData;"old_ack_present"=$hadAck;"old_ack_content"=$oldAck};
+        :set journal [$RUXValidateJournal $journal];
         $RUXWriteFile $journalPath [:serialize to=json value=$journal options=json.no-string-conversion];
         :set applying true;
 
