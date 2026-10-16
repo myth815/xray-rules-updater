@@ -407,14 +407,62 @@
         :set command ($command . " " . $version);
     }
     :set command ($command . " " . $token . " " . $requestID);
-    /container shell [$RUXContainer ($c->"nginx")] cmd=$command no-sh timeout=30;
-    :local state [$RUXReadJSON ($c->"nginx_result") (true)];
+    # shell takes over a CLI session. A second synchronous shell call in the
+    # same named parent may never return. Isolate it in one owned background
+    # job; no :execute file capture (which needs extra RouterOS permissions).
+    :if (!(($c->"nginx_helper") ~ "^/[A-Za-z0-9_./-]+\$")) do={ :error "rules Nginx helper path is invalid"; }
+    :local childSource ("/container shell " . [:tostr [$RUXContainer ($c->"nginx")]] . " cmd=\"" . $command . "\" no-sh timeout=30;");
+    :local childJob [:execute $childSource];
+    :local childOwner ""; :local childStarted ""; :local childGone false; :local childFingerprint false;
+    :local childListed false;
+    :foreach listedID in=[/system script job find] do={ :if ($listedID = $childJob) do={ :set childListed true; } }
+    :if ($childListed) do={
+        :do { :set childOwner [/system script job get $childJob owner]; :set childStarted [:tostr [/system script job get $childJob started]]; :set childFingerprint true; } on-error={}
+        :if (!$childFingerprint) do={
+            :set childListed false;
+            :foreach listedID in=[/system script job find] do={ :if ($listedID = $childJob) do={ :set childListed true; } }
+            :if ($childListed) do={ :error "rules live Nginx child identity could not be inspected"; }
+            :set childGone true;
+        }
+    } else={ :set childGone true; }
+    :local deadline ([:timestamp] + 35s); :local fresh false; :local state "";
+    :while ([:timestamp] < $deadline) do={
+        :do { :set state [$RUXReadJSON ($c->"nginx_result") (false)]; } on-error={ :set state ""; }
+        :if (!$childGone) do={
+            :set childListed false;
+            :foreach listedID in=[/system script job find] do={ :if ($listedID = $childJob) do={ :set childListed true; } }
+            :if (!$childListed) do={ :set childGone true; } else={
+                :local inspected false;
+                :do {
+                    :if (([/system script job get $childJob owner] != $childOwner) || ([:tostr [/system script job get $childJob started]] != $childStarted)) do={ :set childGone true; }
+                    :set inspected true;
+                } on-error={}
+                :if (!$inspected) do={
+                    :set childListed false;
+                    :foreach listedID in=[/system script job find] do={ :if ($listedID = $childJob) do={ :set childListed true; } }
+                    :if ($childListed) do={ :error "rules live Nginx child identity inspection failed"; }
+                    :set childGone true;
+                }
+            }
+        }
+        # Receipt completion precedes helper EXIT/FD9 flock release. Do not
+        # start the next host action until this exact child has also exited.
+        :if ($childGone && ([:typeof $state] = "array") && (($state->"request_id") = $requestID) && (($state->"run_id") = $token)) do={ :set fresh true; :break; }
+        :delay 100ms;
+    }
+    :if (!$fresh) do={
+        :if (!$childGone && $childFingerprint) do={
+            :do { :if (([/system script job get $childJob owner] = $childOwner) && ([:tostr [/system script job get $childJob started]] = $childStarted)) do={ /system script job remove $childJob; } } on-error={}
+        }
+        :error "rules Nginx child did not exit with a fresh receipt within 35 seconds";
+    }
     :local expected "";
     :if ($action = "activate") do={ :set expected "activated"; }
     :if ($action = "restore") do={ :set expected "restored"; }
     :if ($action = "commit") do={ :set expected "committed"; }
     :if ((($state->"run_id") != $token) || (($state->"request_id") != $requestID) || (($state->"action") != $action) || (($state->"completed") != true) || (($state->"status") != $expected)) do={ :error "rules Nginx action did not return a fresh completed receipt"; }
     :if (($version != "") && (($state->"version") != $version)) do={ :error "rules Nginx receipt version disagrees"; }
+    :set ($state->"child_job_id") [:tostr $childJob]; :set ($state->"child_exited") $childGone; :set ($state->"child_fingerprint_captured") $childFingerprint;
     :return $state;
 }
 :global RUXWaitNginx do={

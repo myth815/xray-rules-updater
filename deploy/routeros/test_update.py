@@ -103,6 +103,15 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('($state->"request_id") != $requestID', nginx)
         self.assertIn('($state->"completed") != true', nginx)
         self.assertIn('($state->"version") != $version', nginx)
+        self.assertIn(':local childJob [:execute $childSource]', nginx)
+        self.assertIn('$childGone &&', nginx)
+        self.assertIn('35s', nginx)
+        self.assertIn('/system script job get $childJob started', nginx)
+        self.assertIn('/system script job remove $childJob', nginx)
+        self.assertNotIn('file=', nginx)
+        self.assertIn(':foreach listedID in=[/system script job find]', nginx)
+        self.assertIn('live Nginx child identity could not be inspected', nginx)
+        self.assertIn('!$childGone && $childFingerprint', nginx)
 
     def test_recovery_requires_actual_consumers_and_durable_decision(self):
         main = SOURCE[SOURCE.index("# Both installed sources"):]

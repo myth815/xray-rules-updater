@@ -39,8 +39,8 @@ it does not fabricate a previous version or migrate a legacy configuration.
 
    Set `producer_mountlists` and `host_mountlists` to the actual attached list
    names in their exact order. The host controller validates each controlled
-   source/destination/mode, forbids destination overrides and any extra RW mount. The explicit producer
-   diagnostic directory preserves native-verification diagnostics and must not
+   source/destination/mode, forbids destination overrides and any extra RW mount.
+   The explicit producer diagnostic directory preserves native-verification diagnostics and must not
    overlap publication, state, inputs, MosDNS or Nginx control directories.
    Keep updater `start-on-boot=no`, with no legacy direct `mount` entry. Before
    exposing host RW mounts it sets a non-authorizing host command; it restores
@@ -191,8 +191,15 @@ timed out at `160/192 MiB` with approximately `177.6 MiB` current memory; at
 ## Nginx helper
 
 Run `nginx/apply.sh` inside the existing Nginx container using `/bin/sh` and
-RouterOS `no-sh`. Defaults are `/etc/nginx/rules` writable control and `/rules`
-read-only publication; `RULES_CONTROL_DIR`, `RULES_PUBLISH_DIR` and `NGINX_BIN`
+RouterOS `no-sh`. The host dispatches each shell call to an independent
+`:execute` child job: a synchronous container shell takes over the SSH CLI,
+and a second call in that context can terminate the parent sequence. The named
+parent waits at most 35 seconds for both its fresh receipt and that exact child
+to exit; receipt completion alone precedes helper EXIT and flock release. It
+checks the child owner/start identity before cancellation and never cancels an
+already departed job ID. No output-file capture or additional FTP policy is used.
+Defaults are `/etc/nginx/rules` writable control and `/rules` read-only
+publication; `RULES_CONTROL_DIR`, `RULES_PUBLISH_DIR` and `NGINX_BIN`
 override them. `flock` and `sync` are mandatory. The host Go role and shell helper
 share `.apply.flock`; keep its inode rather than unlinking it during cleanup.
 
