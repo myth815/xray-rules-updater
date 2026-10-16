@@ -81,11 +81,20 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		return summary, e
 	}
 	baselineHash := hash(baseline)
+	domainTargets := make([]string, 0, len(c.DomainSetsFromOutbounds))
+	for _, target := range c.DomainSetsFromOutbounds {
+		domainTargets = append(domainTargets, target)
+	}
+	domainSets, e := client.DomainSetsFromOutbounds(baseline, domainTargets)
+	if e != nil {
+		return summary, errors.New("baseline domain policy validation failed")
+	}
 	policy, _ := json.Marshal(struct {
 		Client     client.Overlay
 		Sites, IPs map[string]string
 		RouterOS   bool
-	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate})
+		DomainSets map[string]string
+	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds})
 	policyHash := hash(policy)
 	identity, _ := json.Marshal([]string{"format-v1", c.GeneratorVersion, source.ReleaseID, strings.ToLower(source.GeoIP.SHA256), strings.ToLower(source.GeoSite.SHA256), baselineHash, policyHash})
 	// Keep IDs short enough for RouterOS list names as well as immutable paths.
@@ -135,6 +144,29 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	derived, e := geodata.Export(ip, site, c.Sites, c.IPs, list)
 	if e != nil {
 		return summary, errors.New("DAT export validation failed")
+	}
+	if len(c.DomainSetsFromOutbounds) != 0 {
+		exports := make(map[string][]string, len(c.DomainSetsFromOutbounds))
+		for filename, target := range c.DomainSetsFromOutbounds {
+			exports[filename] = domainSets[target]
+		}
+		remaining := c.BudgetBytes - int64(len(ip)) - int64(len(site))
+		for _, data := range derived.Files {
+			remaining -= int64(len(data))
+		}
+		domains, err := geodata.ExportDomainSetsBounded(site, exports, c.MaxAssetBytes, remaining)
+		if err != nil {
+			return summary, errors.New("DAT export domain policy validation failed")
+		}
+		for name, data := range domains.Files {
+			if int64(len(data)) > c.MaxAssetBytes {
+				return summary, errors.New("DAT export domain file exceeds size limit")
+			}
+			if _, duplicate := derived.Files[name]; duplicate {
+				return summary, errors.New("DAT export duplicate filename")
+			}
+			derived.Files[name], derived.Counts[name] = data, domains.Counts[name]
+		}
 	}
 	one, e := client.Generate(baseline, c.Client, version)
 	if e != nil {

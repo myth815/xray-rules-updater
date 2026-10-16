@@ -240,6 +240,30 @@ router baseline, set this switch to `false`; otherwise the expected-rule check
 intentionally stops publication. Neither switch changes the default outbound,
 rewrites the catchall nor repairs routing policy automatically.
 
+To derive one declared domain policy for both DNS consumers, optionally set
+`domain_sets_from_outbounds: {"business_remote.txt": "sample-egress"}` and
+`client.dns_servers_from_outbounds: {"dns-business": "sample-egress"}`. The
+first maps a new MosDNS text filename to an exact baseline outbound tag; the
+second replaces only `domains` in the uniquely tagged client DNS server.
+See [the credential-free configuration fragment](examples/domain-sets-fragment.json)
+and merge it with the existing client overlay; replace its synthetic tag and
+documentation-only resolver address. DNS server order, address, tag,
+`finalQuery`, `skipFallback` and other fields are preserved, so the overlay must
+explicitly supply the intended resolver, egress routing and failure behavior.
+Validate those settings with the target client core.
+
+Only pure `domain` rules targeting that outbound are collected; optional
+`type: "field"` and `ruleTag` are accepted. Domain-free rules are skipped;
+additional conditions or effects on a domain rule fail instead of broadening
+it. This collects declared predicates, without evaluating arbitrary earlier
+rules or their reachability. Native `geosite:` expressions and attributes stay
+in client JSON. MosDNS text expands those selected GEO entries and merges
+`full:`, `domain:`, `keyword:`, `regexp:` and bare substring expressions, with
+duplicates removed. Missing nodes, empty GEO selections, ambiguous DNS tags,
+unknown matchers and filename collisions fail publication. Exports share the
+128-file limit and existing file/publication budgets; repeated client DNS
+domain copies have an additional aggregate 4 MiB limit.
+
 ### Application acknowledgement
 
 For host-managed application, a configuration fragment can use:

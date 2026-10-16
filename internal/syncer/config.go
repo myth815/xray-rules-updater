@@ -25,24 +25,25 @@ type Source struct {
 	GeoSite    Asset  `json:"geosite,omitempty"`
 }
 type Config struct {
-	GeneratorVersion     string            `json:"-"`
-	SchemaVersion        int               `json:"schema_version"`
-	Source               Source            `json:"source"`
-	Baseline             string            `json:"baseline"`
-	BaselineDirectory    string            `json:"baseline_directory,omitempty"`
-	RequireApplyAck      bool              `json:"require_apply_ack,omitempty"`
-	ApplyAckPath         string            `json:"apply_ack_path,omitempty"`
-	ApplyTransactionPath string            `json:"apply_transaction_path,omitempty"`
-	Client               client.Overlay    `json:"client"`
-	Sites                map[string]string `json:"sites"`
-	IPs                  map[string]string `json:"ips"`
-	RouterOSCandidate    bool              `json:"routeros_candidate"`
-	PublishDir           string            `json:"publish_dir"`
-	BudgetBytes          int64             `json:"budget_bytes"`
-	MinFreeBytes         int64             `json:"min_free_bytes"`
-	MaxAssetBytes        int64             `json:"max_asset_bytes"`
-	TimeoutSeconds       int               `json:"timeout_seconds"`
-	ServeGroupID         *int              `json:"serve_group_id,omitempty"`
+	GeneratorVersion        string            `json:"-"`
+	SchemaVersion           int               `json:"schema_version"`
+	Source                  Source            `json:"source"`
+	Baseline                string            `json:"baseline"`
+	BaselineDirectory       string            `json:"baseline_directory,omitempty"`
+	RequireApplyAck         bool              `json:"require_apply_ack,omitempty"`
+	ApplyAckPath            string            `json:"apply_ack_path,omitempty"`
+	ApplyTransactionPath    string            `json:"apply_transaction_path,omitempty"`
+	Client                  client.Overlay    `json:"client"`
+	Sites                   map[string]string `json:"sites"`
+	IPs                     map[string]string `json:"ips"`
+	DomainSetsFromOutbounds map[string]string `json:"domain_sets_from_outbounds,omitempty"`
+	RouterOSCandidate       bool              `json:"routeros_candidate"`
+	PublishDir              string            `json:"publish_dir"`
+	BudgetBytes             int64             `json:"budget_bytes"`
+	MinFreeBytes            int64             `json:"min_free_bytes"`
+	MaxAssetBytes           int64             `json:"max_asset_bytes"`
+	TimeoutSeconds          int               `json:"timeout_seconds"`
+	ServeGroupID            *int              `json:"serve_group_id,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -152,15 +153,18 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	reserved := map[string]bool{"geoip.dat": true, "geosite.dat": true, "onexray.json": true, "manifest.json": true, "routeros-cn-v4.rsc": true}
+	reserved := map[string]bool{"geoip.dat": true, "geosite.dat": true, "onexray.json": true, "manifest.json": true, "status.json": true, "verification.json": true, "health.json": true, "routeros-cn-v4.rsc": true}
 	seen := map[string]bool{}
-	for _, m := range []map[string]string{c.Sites, c.IPs} {
+	for _, m := range []map[string]string{c.Sites, c.IPs, c.DomainSetsFromOutbounds} {
 		for name, selector := range m {
 			if filepath.Base(name) != name || !filenameToken.MatchString(name) || reserved[name] || seen[name] || selector == "" {
 				return fmt.Errorf("invalid or duplicate export filename")
 			}
 			seen[name] = true
 		}
+	}
+	if len(seen) > 128 || len(c.Client.DNSServersFromOutbounds) > 128 {
+		return errors.New("domain exports exceed file/server count limit")
 	}
 	return nil
 }

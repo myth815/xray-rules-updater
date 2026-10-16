@@ -1,0 +1,25 @@
+{
+  "domain_sets_from_outbounds": {
+    "business_remote.txt": "sample-egress"
+  },
+  "client": {
+    "dns_servers_from_outbounds": {
+      "dns-business": "sample-egress"
+    },
+    "dns": {
+      "servers": [
+        {
+          "address": "tcp://192.0.2.53",
+          "tag": "dns-business",
+          "domains": ["full:placeholder.invalid"],
+          "finalQuery": true,
+          "skipFallback": true
+        },
+        "1.1.1.1"
+      ]
+    },
+    "prepend_rules": [
+      {"inboundTag": ["dns-business"], "outboundTag": "sample-egress"}
+    ]
+  }
+}

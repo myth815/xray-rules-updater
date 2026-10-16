@@ -28,6 +28,7 @@ type Overlay struct {
 	DropInboundRules         bool                `json:"drop_inbound_rules"`
 	PrependRules             []json.RawMessage   `json:"prepend_rules"`
 	DNS                      json.RawMessage     `json:"dns"`
+	DNSServersFromOutbounds  map[string]string   `json:"dns_servers_from_outbounds,omitempty"`
 }
 
 type object map[string]json.RawMessage
@@ -79,6 +80,12 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 	if len(overlay.DNS) != 0 {
 		// A present null is not an instruction to inherit or remove DNS.
 		top["dns"] = append(json.RawMessage(nil), overlay.DNS...)
+	}
+	if len(overlay.DNSServersFromOutbounds) != 0 {
+		top["dns"], err = deriveDNSServerDomains(baseline, top["dns"], overlay.DNSServersFromOutbounds)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var dnsTags map[string]bool
 	if raw, ok := top["dns"]; ok {
