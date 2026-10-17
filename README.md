@@ -309,6 +309,17 @@ resolution strategies are retained. Nonempty DNS hosts, system-host lookup,
 global fallback disabling, other FakeDNS servers, reserved-tag collisions and
 balancer selectors that would acquire the generated loopback are rejected.
 
+This explicit opt-in also generates `env: {"xray.cone.disabled": "true"}` with a
+string value. It does not accept arbitrary `baseline.env`, and an omitted opt-in
+does not add environment settings. The selected Core must support destination-isolated
+UDP dispatch for this flag. Configuration validation alone is insufficient:
+verify the Core bundled in each installed OneXray build and the relevant supported
+upstream release before treating this mode as ready. Generating the flag does not
+replace installed-client functional acceptance or establish release availability.
+Deploy this generator change with a new embedded version or source SHA; publication
+identity includes the generator version, so reusing the old value can retain an
+existing unchanged output without this setting.
+
 Coverage requires the flow to use controlled FakeDNS, or to expose a domain
 that ordinary sniffing can recover. Application-owned DoH/DoT, hardcoded IPs,
 or an old real-IP cache combined with ECH/hidden SNI cannot be classified by

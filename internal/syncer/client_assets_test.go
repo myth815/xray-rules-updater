@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/myth815/xray-rules-updater/internal/client"
 )
 
 func TestVersionedClientAssetsBindNativeReferencesWithoutDATCopies(t *testing.T) {
@@ -91,6 +93,76 @@ func TestVersionedClientAssetsBindNativeReferencesWithoutDATCopies(t *testing.T)
 		if n.ClientAssets[key].Name != a.Name || n.ClientAssets[key].SHA256 != a.SHA256 {
 			t.Fatal("identical DAT needlessly renamed")
 		}
+	}
+}
+
+// Exercise Generate through native GEO binding, provider metadata, versioned
+// publication and the complete Raw transfer. No core, network or real node is used.
+func TestOneXrayFakeDNSPublishedTransferRetainsStrictUDP(t *testing.T) {
+	c := fixture(t)
+	c.OneXrayVersionedGEO = true
+	c.OneXrayProviderGEOMetadata = true
+	c.ClientAssetBaseURL = "https://rules.example.internal"
+	baseline := []byte(`{
+		"dns":{"servers":[
+			{"address":"https://resolver.example.invalid/dns-query","tag":"dns-ai","domains":["domain:ai.example.invalid"],"skipFallback":true},
+			"https://ordinary.example.invalid/dns-query"
+		]},
+		"outbounds":[
+			{"tag":"direct","protocol":"freedom"},
+			{"tag":"block","protocol":"blackhole"},
+			{"tag":"usa-ai","protocol":"socks","settings":{"servers":[{"address":"192.0.2.10","port":1080}]}},
+			{"tag":"mobile-dns-out","protocol":"dns","settings":{"rules":[{"qType":"1,28","action":"hijack"},{"action":"direct"}]}}
+		],
+		"routing":{"domainStrategy":"IPIfNonMatch","rules":[
+			{"domain":["domain:ai.example.invalid"],"outboundTag":"usa-ai"},
+			{"domain":["geosite:cn"],"outboundTag":"direct"},
+			{"ip":["geoip:cn"],"outboundTag":"direct"},
+			{"network":"tcp,udp","outboundTag":"direct"}
+		]}
+	}`)
+	if err := os.WriteFile(c.Baseline, baseline, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.Client.OneXrayFakeDNS = &client.OneXrayFakeDNS{OutboundTag: "usa-ai", DNSServerTag: "dns-ai", DNSOutboundTag: "mobile-dns-out"}
+	c.Client.PrependRules = []json.RawMessage{json.RawMessage(`{"inboundTag":["tunIn"],"port":"53","outboundTag":"mobile-dns-out"}`)}
+	result, err := Run(context.Background(), c)
+	if err != nil || result.Status != "published" {
+		t.Fatalf("opt-in publication: %+v %v", result, err)
+	}
+	assertCurrent(t, c, result.Version)
+	dir := filepath.Join(c.PublishDir, "current")
+	published, err := os.ReadFile(filepath.Join(dir, "onexray.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top struct {
+		Env     map[string]string `json:"env"`
+		FakeDNS json.RawMessage   `json:"fakedns"`
+		Geodata json.RawMessage   `json:"geodata"`
+		Name    string            `json:"name"`
+	}
+	if err := json.Unmarshal(published, &top); err != nil {
+		t.Fatal(err)
+	}
+	if len(top.Env) != 1 || top.Env["xray.cone.disabled"] != "true" || len(top.FakeDNS) == 0 || len(top.Geodata) == 0 || top.Name != c.Client.Name+" / "+result.Version {
+		t.Fatal("full opt-in publication lost strict UDP, provider assets or versioned identity")
+	}
+	transfer, err := os.ReadFile(filepath.Join(dir, "onexray-import.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(strings.TrimSpace(string(transfer)), "\n")
+	if len(parts) != 3 {
+		t.Fatal("complete transfer must include the configuration and two native DATs")
+	}
+	u, err := url.Parse(parts[0])
+	if err != nil || u.Path != "/config/add" || u.Query().Get("type") != "raw" {
+		t.Fatal("complete opt-in transfer is not a Raw configuration link")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(u.Query().Get("data"))
+	if err != nil || string(decoded) != string(published) {
+		t.Fatal("complete transfer did not retain the exact published configuration")
 	}
 }
 

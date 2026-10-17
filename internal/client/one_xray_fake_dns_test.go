@@ -61,9 +61,10 @@ func TestOneXrayFakeDNSExplicitNativePlatformGraph(t *testing.T) {
 		t.Fatal("server secret or app metadata copied into native configuration")
 	}
 	top := decodeObject(t, result)
-	if got := sortedKeys(top); !reflect.DeepEqual(got, []string{"dns", "fakedns", "inbounds", "outbounds", "routing"}) {
+	if got := sortedKeys(top); !reflect.DeepEqual(got, []string{"dns", "env", "fakedns", "inbounds", "outbounds", "routing"}) {
 		t.Fatalf("native platform fields: %v", got)
 	}
+	assertJSONEqual(t, top["env"], json.RawMessage(`{"xray.cone.disabled":"true"}`))
 	assertJSONEqual(t, top["inbounds"], json.RawMessage(`[{"tag":"tunIn","protocol":"tun","sniffing":{"enabled":true,"metadataOnly":true,"routeOnly":false,"destOverride":["fakedns"]}}]`))
 	assertJSONEqual(t, top["fakedns"], json.RawMessage(`[{"ipPool":"198.19.0.0/16","poolSize":8192},{"ipPool":"fc00:1::/64","poolSize":8192}]`))
 	sets, err := DomainSetsFromOutbounds(baseline, []string{"usa-ai"})
@@ -149,11 +150,25 @@ func TestOneXrayFakeDNSOmittedIsByteCompatible(t *testing.T) {
 		t.Fatal("omitted opt-in changed native output")
 	}
 	top := decodeObject(t, old)
-	if top["inbounds"] != nil || top["fakedns"] != nil {
+	if top["inbounds"] != nil || top["fakedns"] != nil || top["env"] != nil {
 		t.Fatal("default adapter generated platform modules")
 	}
 	if bytes.Contains(old, []byte("onexray-ordinary")) {
 		t.Fatal("default adapter injected a loopback")
+	}
+}
+
+func TestOneXrayFakeDNSDoesNotAcceptBaselineEnvironment(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		baseline := decodeObject(t, []byte(oneXrayBaselineFixture))
+		baseline["env"] = json.RawMessage(`{"xray.cone.disabled":"true","PATH":"/synthetic"}`)
+		overlay := oneXrayFixtureOverlay()
+		if !enabled {
+			overlay.OneXrayFakeDNS = nil
+		}
+		if _, err := Generate(marshal(t, baseline), overlay, ""); err == nil || !strings.Contains(err.Error(), `unsupported top-level field "env"`) {
+			t.Fatalf("baseline environment accepted with opt-in=%v: %v", enabled, err)
+		}
 	}
 }
 

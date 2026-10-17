@@ -246,6 +246,9 @@ func adaptOneXrayFakeDNS(baseline []byte, top object, selected map[string]bool, 
 	dns["servers"] = oneXrayJSON(newServers)
 	routing["rules"] = oneXrayJSON(prefix)
 	top["dns"], top["routing"], top["outbounds"] = oneXrayJSON(dns), oneXrayJSON(routing), oneXrayJSON(kept)
+	// This explicit platform adapter selects the supported destination-isolated
+	// UDP mode. Baseline env remains rejected; no arbitrary environment is copied.
+	top["env"] = oneXrayJSON(map[string]string{"xray.cone.disabled": "true"})
 	top["fakedns"] = oneXrayJSON([]any{
 		map[string]any{"ipPool": oneXrayFakeIPv4Pool, "poolSize": 8192},
 		map[string]any{"ipPool": oneXrayFakeIPv6Pool, "poolSize": 8192},
