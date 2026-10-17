@@ -20,6 +20,9 @@ readiness and client acceptance remain specific to each installation.
   Xray attribute-presence filtering (`category@attribute`, multiple attributes AND).
 - Generates a versioned RouterOS CN IPv4 **candidate address list**. It does not
   activate firewall rules, NAT, policy routes or FastTrack.
+- Can publish a separate, explicit business-IPv4 approval document. It verifies
+  each literal CIDR against the same baseline without deriving approvals from
+  GEO, domain rules or DNS. No RouterOS collection or firewall rule is applied.
 - Adapts an explicitly supplied, validated full Xray baseline into a complete
   OneXray JSON subscription, preserving rule order, AND conditions, node chains
   and the default outbound. The subscription entry name includes its version.
@@ -43,6 +46,56 @@ operation.** The optional host coordinator handles target-core validation,
 service application, live readiness and rollback separately. Client selection
 and activation still belong to the client. A successful publication alone does
 not prove that any consumer loaded the files or that CN bypass is active.
+
+### Explicit RouterOS business-IP data
+
+Omitting `routeros_business_direct` preserves the previous publication policy
+hash and output set. This opt-in publishes `routeros-business-direct.json`, even
+when the operator-approved list is empty:
+
+```json
+"routeros_business_direct": {"outbound_tag": "direct", "approved": []}
+```
+
+An approval has four required fields: `cidr`, `reason`,
+`exclusive_business_operator_attestation: true`, and `baseline_rule_sha256`.
+Within the opt-in object and each approval, decoded field names must match this
+schema exactly. Case-insensitive aliases are rejected, even when supplied alone;
+JSON escapes that decode to the exact canonical field name remain valid.
+The attestation records the operator's explicit confirmation that the address
+is dedicated to the approved direct business. It is not an automated proof that
+an IP is unshared or that promoting an IP match ahead of domain routing is safe.
+Keep the list empty when that cannot be confirmed. Shared/CDN addresses and
+addresses inferred from DNS or GEO are not an approval source. An IP-only router
+cannot distinguish AI and ordinary domains sharing the same destination IP.
+
+The CIDR must be canonical public IPv4, exactly equal to a literal CIDR in one
+unique baseline rule containing only `type: "field"`, `ip`, and the selected
+`outboundTag`. The rule cannot contain GEO expressions, domains, inbound tags,
+ports or other conditions. Its SHA256 is over the compact `encoding/json`
+serialization of that rule object, with sorted object keys; these accepted rule
+fields contain only ASCII strings. This can also be computed with Python's
+`json.dumps(rule, sort_keys=True, separators=(",", ":"))`, encoded as UTF-8.
+The target must be a plain native `freedom`: only its tag/protocol, empty
+settings/stream settings, and optional explicit `AsIs` strategies are accepted.
+Redirects, proxy chains, socket bindings, fragmentation and unknown fields fail.
+
+The producer rejects duplicate or intersecting approvals, noncanonical CIDRs,
+special-purpose/reserved IPv4 ranges, and intersections with declared synthetic
+address pools. The conservative built-in exclusion table is not a live IANA
+classification feed. Limits are 128 approvals, 65,536 covered IPv4 addresses in
+total, 256 UTF-8 bytes per reason and 16 KiB for the complete output. The normal
+per-file and publication storage limits also apply. Nothing is merged or expanded
+into a newly approved prefix. Reasons and attestations remain JSON data only.
+
+The artifact retains baseline SHA256, reasons, exact rule proofs and a
+data-only activation marker. Its bytes/count are covered by the normal manifest,
+and approvals affect policy/version identity. Neither the native baseline nor
+OneXray routing/outbound order is changed. Revoking an approval removes it from
+the next current artifact; this does not revoke any already applied RouterOS
+state. The optional host coordinator does not yet install, replace, revoke or
+recover business-IP address sets or their TCP/UDP/filter hooks. The separate
+`routeros-cn-v4.rsc` remains an unapplied GEO candidate.
 
 ## Run
 

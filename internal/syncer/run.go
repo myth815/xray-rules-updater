@@ -39,6 +39,13 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 			summary.ErrorCode = errorCode(err)
 		}
 	}()
+	if c.RouterOSBusinessDirect != nil {
+		// Missing and explicit-empty approvals describe the same empty policy.
+		// Copy before normalizing so a caller-owned input is never mutated.
+		business := *c.RouterOSBusinessDirect
+		business.Approved = append([]BusinessDirectApproval{}, business.Approved...)
+		c.RouterOSBusinessDirect = &business
+	}
 	if err = c.validate(); err != nil {
 		return summary, err
 	}
@@ -81,6 +88,13 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		return summary, e
 	}
 	baselineHash := hash(baseline)
+	businessDirect, e := generateBusinessDirect(baseline, c.RouterOSBusinessDirect)
+	if e != nil {
+		return summary, e
+	}
+	if int64(len(businessDirect)) > c.MaxAssetBytes {
+		return summary, errors.New("RouterOS business direct: output size limit exceeded")
+	}
 	domainTargets := make([]string, 0, len(c.DomainSetsFromOutbounds))
 	for _, target := range c.DomainSetsFromOutbounds {
 		domainTargets = append(domainTargets, target)
@@ -90,14 +104,15 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 		return summary, errors.New("baseline domain policy validation failed")
 	}
 	policy, _ := json.Marshal(struct {
-		Client              client.Overlay
-		Sites, IPs          map[string]string
-		RouterOS            bool
-		DomainSets          map[string]string
-		VersionedGEO        bool
-		AssetBaseURL        string
-		ProviderGEOMetadata bool `json:",omitempty"`
-	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds, c.OneXrayVersionedGEO, c.ClientAssetBaseURL, c.OneXrayProviderGEOMetadata})
+		Client                 client.Overlay
+		Sites, IPs             map[string]string
+		RouterOS               bool
+		DomainSets             map[string]string
+		VersionedGEO           bool
+		AssetBaseURL           string
+		ProviderGEOMetadata    bool                    `json:",omitempty"`
+		RouterOSBusinessDirect *RouterOSBusinessDirect `json:",omitempty"`
+	}{c.Client, c.Sites, c.IPs, c.RouterOSCandidate, c.DomainSetsFromOutbounds, c.OneXrayVersionedGEO, c.ClientAssetBaseURL, c.OneXrayProviderGEOMetadata, c.RouterOSBusinessDirect})
 	policyHash := hash(policy)
 	identity, _ := json.Marshal([]string{"format-v1", c.GeneratorVersion, source.ReleaseID, strings.ToLower(source.GeoIP.SHA256), strings.ToLower(source.GeoSite.SHA256), baselineHash, policyHash})
 	// Keep IDs short enough for RouterOS list names as well as immutable paths.
@@ -126,6 +141,7 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	if estimate == 0 {
 		estimate = 2 * c.MaxAssetBytes
 	}
+	estimate += int64(len(businessDirect))
 	if e = capacity(c.PublishDir, c.BudgetBytes, c.MinFreeBytes, estimate); e != nil {
 		return summary, e
 	}
@@ -150,7 +166,7 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 	}
 	// Retained versions and the publisher's fixed write allowance also consume
 	// admission space; do not construct outputs against the whole root budget.
-	remaining := c.BudgetBytes - used - int64(len(ip)) - int64(len(site)) - (64 << 10)
+	remaining := c.BudgetBytes - used - int64(len(ip)) - int64(len(site)) - int64(len(businessDirect)) - (64 << 10)
 	if remaining < 1 {
 		return summary, errors.New("storage budget exhausted by DAT assets")
 	}
@@ -188,6 +204,10 @@ func Run(ctx context.Context, c Config) (summary Summary, err error) {
 			}
 			derived.Files[name], derived.Counts[name] = data, domains.Counts[name]
 		}
+	}
+	if businessDirect != nil {
+		derived.Files[businessDirectFilename] = businessDirect
+		derived.Counts[businessDirectFilename] = len(c.RouterOSBusinessDirect.Approved)
 	}
 	one, e := client.Generate(baseline, c.Client, version)
 	if e != nil {
@@ -297,6 +317,9 @@ func errorCode(err error) string {
 		return source.Code
 	}
 	text := err.Error()
+	if strings.HasPrefix(text, "RouterOS business direct:") {
+		return "routeros_business_invalid"
+	}
 	for _, entry := range []struct{ key, code string }{
 		{"storage", "capacity"}, {"space", "capacity"}, {"SHA256", "digest"}, {"GEO dependency", "geo_reference"}, {"DAT export", "dat_invalid"}, {"client adaptation", "client_invalid"}, {"source", "source_fetch"}, {"release", "source_release"}, {"baseline changed", "baseline_changed"}, {"lock", "busy"}, {"durability", "commit_durability"},
 	} {

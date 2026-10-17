@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 type Asset struct {
@@ -25,28 +26,29 @@ type Source struct {
 	GeoSite    Asset  `json:"geosite,omitempty"`
 }
 type Config struct {
-	GeneratorVersion           string            `json:"-"`
-	SchemaVersion              int               `json:"schema_version"`
-	Source                     Source            `json:"source"`
-	Baseline                   string            `json:"baseline"`
-	BaselineDirectory          string            `json:"baseline_directory,omitempty"`
-	RequireApplyAck            bool              `json:"require_apply_ack,omitempty"`
-	ApplyAckPath               string            `json:"apply_ack_path,omitempty"`
-	ApplyTransactionPath       string            `json:"apply_transaction_path,omitempty"`
-	Client                     client.Overlay    `json:"client"`
-	OneXrayVersionedGEO        bool              `json:"one_xray_versioned_geo,omitempty"`
-	OneXrayProviderGEOMetadata bool              `json:"one_xray_provider_geo_metadata,omitempty"`
-	ClientAssetBaseURL         string            `json:"client_asset_base_url,omitempty"`
-	Sites                      map[string]string `json:"sites"`
-	IPs                        map[string]string `json:"ips"`
-	DomainSetsFromOutbounds    map[string]string `json:"domain_sets_from_outbounds,omitempty"`
-	RouterOSCandidate          bool              `json:"routeros_candidate"`
-	PublishDir                 string            `json:"publish_dir"`
-	BudgetBytes                int64             `json:"budget_bytes"`
-	MinFreeBytes               int64             `json:"min_free_bytes"`
-	MaxAssetBytes              int64             `json:"max_asset_bytes"`
-	TimeoutSeconds             int               `json:"timeout_seconds"`
-	ServeGroupID               *int              `json:"serve_group_id,omitempty"`
+	GeneratorVersion           string                  `json:"-"`
+	SchemaVersion              int                     `json:"schema_version"`
+	Source                     Source                  `json:"source"`
+	Baseline                   string                  `json:"baseline"`
+	BaselineDirectory          string                  `json:"baseline_directory,omitempty"`
+	RequireApplyAck            bool                    `json:"require_apply_ack,omitempty"`
+	ApplyAckPath               string                  `json:"apply_ack_path,omitempty"`
+	ApplyTransactionPath       string                  `json:"apply_transaction_path,omitempty"`
+	Client                     client.Overlay          `json:"client"`
+	OneXrayVersionedGEO        bool                    `json:"one_xray_versioned_geo,omitempty"`
+	OneXrayProviderGEOMetadata bool                    `json:"one_xray_provider_geo_metadata,omitempty"`
+	ClientAssetBaseURL         string                  `json:"client_asset_base_url,omitempty"`
+	Sites                      map[string]string       `json:"sites"`
+	IPs                        map[string]string       `json:"ips"`
+	DomainSetsFromOutbounds    map[string]string       `json:"domain_sets_from_outbounds,omitempty"`
+	RouterOSCandidate          bool                    `json:"routeros_candidate"`
+	RouterOSBusinessDirect     *RouterOSBusinessDirect `json:"routeros_business_direct,omitempty"`
+	PublishDir                 string                  `json:"publish_dir"`
+	BudgetBytes                int64                   `json:"budget_bytes"`
+	MinFreeBytes               int64                   `json:"min_free_bytes"`
+	MaxAssetBytes              int64                   `json:"max_asset_bytes"`
+	TimeoutSeconds             int                     `json:"timeout_seconds"`
+	ServeGroupID               *int                    `json:"serve_group_id,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -56,6 +58,22 @@ var digest = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 func LoadConfig(data []byte, base string) (Config, error) {
 	var c Config
+	// Inspect decoded root keys before typed decoding: last-wins may otherwise
+	// turn a repeated opt-in into nil. A null or escaped key still opts this
+	// input into whole-document duplicate-key validation. Legacy inputs without
+	// the field retain their existing loading behavior.
+	var root map[string]json.RawMessage
+	if json.Unmarshal(data, &root) == nil {
+		businessKeys := 0
+		for key := range root {
+			if strings.EqualFold(key, "routeros_business_direct") {
+				businessKeys++
+			}
+		}
+		if businessKeys > 0 && (businessKeys != 1 || checkBusinessJSON(data) != nil) {
+			return c, errors.New("invalid configuration")
+		}
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
@@ -96,6 +114,11 @@ func LoadConfig(data []byte, base string) (Config, error) {
 	return c, nil
 }
 func (c *Config) validate() error {
+	if c.RouterOSBusinessDirect != nil {
+		if err := validateBusinessDirect(*c.RouterOSBusinessDirect); err != nil {
+			return err
+		}
+	}
 	if err := validateClientAssetConfig(*c); err != nil {
 		return err
 	}
@@ -160,6 +183,9 @@ func (c *Config) validate() error {
 		}
 	}
 	reserved := map[string]bool{"geoip.dat": true, "geosite.dat": true, "onexray.json": true, "onexray-geodata.txt": true, "onexray-import.txt": true, "onexray-config.txt": true, "manifest.json": true, "status.json": true, "verification.json": true, "health.json": true, "host-control.json": true, "routeros-cn-v4.rsc": true}
+	if c.RouterOSBusinessDirect != nil {
+		reserved[businessDirectFilename] = true
+	}
 	seen := map[string]bool{}
 	for _, m := range []map[string]string{c.Sites, c.IPs, c.DomainSetsFromOutbounds} {
 		for name, selector := range m {

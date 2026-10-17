@@ -12,6 +12,7 @@
   },
   "ips": {"geoip_cn.txt": "cn", "geoip_private.txt": "private"},
   "routeros_candidate": true,
+  "routeros_business_direct": {"outbound_tag": "direct", "approved": []},
   "publish_dir": "/publish",
   "budget_bytes": 167772160,
   "min_free_bytes": 67108864,
