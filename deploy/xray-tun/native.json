@@ -1,0 +1,27 @@
+{
+  "log": {
+    "access": "none",
+    "error": "none",
+    "loglevel": "warning",
+    "dnsLog": false
+  },
+  "env": {
+    "xray.cone.disabled": "true"
+  },
+  "inbounds": [
+    {
+      "tag": "tunIn",
+      "protocol": "tun",
+      "settings": {
+        "name": "xray0",
+        "MTU": 1500,
+        "userLevel": 0
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
+      }
+    }
+  ]
+}

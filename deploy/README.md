@@ -275,3 +275,66 @@ to the interruption-state matrix; they do not execute RouterOS. Target validatio
 must additionally parse and define the actual functions, exercise isolated
 worker/mount/helper primitives, run named-script fault fixtures and validate
 startup scheduling. Keep those fixtures separate from production consumers.
+
+## Native TUN routing barrier (experimental)
+
+`xray-tun/fail_closed_routes.sh` manages IPv4 routing inside a dedicated gateway
+network namespace. It is not installed or enabled by the updater. Host firewall
+and complete gateway lifecycle acceptance are still required before deployment.
+
+An unavailable proxy may interrupt service. It must not send protected traffic
+through the ordinary domestic route. Install the barrier before accepting or
+forwarding client packets, then add the active TUN route only after Core is ready:
+
+```sh
+sh /test/fail_closed_routes.sh prepare 172.28.66.0/24 20 2000 xray0
+# Start Core and wait for xray0 inside this private namespace.
+sh /test/fail_closed_routes.sh activate 172.28.66.0/24 20 2000 xray0
+```
+
+The source rule selects a table containing an `unreachable` default at metric
+32767 and, while Core is ready, a TUN default at metric 10. Losing the TUN route
+therefore rejects traffic instead of allowing lookup to continue to the main
+table. The helper refuses occupied priorities/tables at preparation and rejects
+foreign routes when checking its barrier. `XRAY_ROUTE_IP` can name the platform's
+absolute IP-command path; it defaults to `/sbin/ip`.
+
+Before orderly exit, disable packet forwarding in the gateway namespace. The
+optional `deactivate` action removes only its active TUN route. Keep the source
+rule and unreachable default until that namespace is destroyed. There is no
+cleanup command that deletes the barrier. Core crashes and restarts must preserve
+this behavior; the host must also prevent direct WAN fallback during container
+creation and teardown. This helper alone is not proof of complete lifecycle or
+IPv6 protection.
+
+`xray-tun/host_barrier.rsc` is an opt-in RouterOS function. For an existing,
+dedicated FIB table it prepares or checks a persistent blackhole default at
+distance 254. It accepts at most one expected private unicast next hop, leaves
+that next hop unchanged, and refuses other routes or ambiguous ownership. Keep
+the blackhole when stopping or replacing the gateway. Its presence does not
+prove firewall coverage, forwarding readiness, or actual traffic acceptance.
+
+`xray-tun/gateway.sh` is a separate candidate PID 1 wrapper, not part of the
+one-shot update worker. Mount its directory at `/gateway`, the existing JSON
+modules at `/etc/xray`, and the shared publication at `/rules`, all read-only.
+It requires `XRAY_GATEWAY_INTERFACE`, `XRAY_GATEWAY_ADDRESS`,
+`XRAY_GATEWAY_SOURCE_CIDR`, `XRAY_LOCATION_ASSET` and
+`XRAY_CONE_DISABLED=true`. Its Core must have passed native TUN and per-destination
+UDP routing acceptance on the target platform; this repository does not bundle
+or publish a Core binary.
+
+The wrapper disables IPv4 forwarding, validates the original modules with the
+native overlay, installs the source rejection table and a rejection rule for
+other forwarded sources, starts Core, and enables forwarding after TUN readiness.
+On exit it disables forwarding before terminating Core. It writes no ongoing
+access or error logs. `native.json` adds one `tunIn` listener and logging settings;
+it contains no nodes, DNS servers, routing policy or expanded GEO collections.
+
+Modules are supplied individually in lexical order and the overlay is supplied
+last. Xray appends `-confdir` modules after explicit config arguments, so combining
+`-config native.json` with `-confdir /etc/xray` would not provide the same overlay
+order. Configuration validation and update/recovery must continue to use the
+actual consumer identity and asset version. Configure final boot and restart
+properties while the candidate is stopped, then verify its process generation
+and forwarding state after starting it. Do not change a running consumer's
+lifecycle properties as a substitute for a verified restart procedure.
