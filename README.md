@@ -228,6 +228,10 @@ Complete the initial migration separately with a real rollback snapshot:
   metadata request aborts the task.
 
 The host retries a pending current version before asking for another release.
+During a runtime-directory transition, `<state_root>/runtime-change.lock`
+blocks update mode while local Recover remains available. The transition owner
+must clear its own lock after a verified commit or restoration; an unexplained
+lock requires inspection before updates resume.
 It requires fresh task IDs for generation, verification and native health, then
 restarts Xray before MosDNS, checks the stable subscription manifest, and writes
 the application acknowledgement only after those checks pass. A bounded journal
@@ -339,6 +343,13 @@ Changed or missing helpers, broader FakeDNS ownership and unknown profiles
 fail generation. The full original baseline still determines publication
 identity and native server verification. This does not deploy a router runtime
 or enable client FakeDNS; enable and validate each platform separately.
+The same loopback constraints apply even when client FakeDNS is disabled:
+`AsIs` is supported; `IPIfNonMatch` requires an existing unconditional TCP/UDP
+catchall, and other routing strategies are rejected. Retained outbound
+`targetStrategy` must be absent, empty or `AsIs`. Balancer prefixes cannot
+acquire the server-owned helpers. These checks prevent a future baseline edit
+from silently changing DNS-dependent ordinary routing through the server's
+second pass.
 
 `client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
 when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).

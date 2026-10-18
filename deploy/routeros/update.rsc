@@ -581,6 +581,13 @@
 :local ownerJobs ([:len [/system script job find where script=($settings->"script_name")]] + [:len [/system script job find where script=($settings->"recover_script_name")]]);
 :if ($ownerJobs != 1) do={ :error "rules host needs exactly one owning named script job"; }
 :if ((($settings->"mode") != "update") && (($settings->"mode") != "recover-only")) do={ :error "rules host mode is invalid"; }
+# A runtime-directory switch is distinct from the GEO publication journal.
+# Keep local Recover available while its owner validates the new configuration;
+# an update must not publish against a partially switched runtime baseline.
+:if (($settings->"mode") = "update") do={
+    :local runtimeLockPath (($settings->"state_root") . "/runtime-change.lock");
+    :if ([:len [/file find where name=$runtimeLockPath]] != 0) do={ :error "rules runtime configuration transition is active"; }
+}
 :local publish ($settings->"publish_root"); :local config ($settings->"config_root");
 :local hostRoot ($settings->"state_root");
 :local journalPath ($hostRoot . "/transaction.json"); :local ackPath ($hostRoot . "/applied.json");

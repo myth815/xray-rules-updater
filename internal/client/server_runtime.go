@@ -113,6 +113,12 @@ func normalizeServerRuntime(baseline []byte, overlay Overlay) ([]byte, error) {
 			return nil, fmt.Errorf("ai66-v1 invalid or duplicate retained tag")
 		}
 		retained[tag] = out
+		if raw, exists := out["targetStrategy"]; exists {
+			strategy, err := optionalString(raw, "server outbound.targetStrategy")
+			if err != nil || (strategy != "" && strategy != "AsIs") {
+				return nil, fmt.Errorf("ai66-v1 outbound targetStrategy requires explicit two-pass adaptation")
+			}
+		}
 	}
 	// Do not apply the client's host-socket checks before the existing explicit
 	// omission step: real server proxy nodes may carry RouterOS-only marks.
@@ -171,6 +177,35 @@ func normalizeServerRuntime(baseline []byte, overlay Overlay) ([]byte, error) {
 	rules, err := readArray(routing["rules"], "server routing rules")
 	if err != nil || len(rules) == 0 || !sameRuntimeJSON(rules[0], map[string]any{"type": "field", "ruleTag": "ai66-dns-intercept", "inboundTag": []string{"ai66-dns-in"}, "outboundTag": "ai66-dns-out"}) {
 		return nil, fmt.Errorf("ai66-v1 first DNS interception changed")
+	}
+	if err := checkOneXrayOrdinaryRouting(routing, rules); err != nil {
+		return nil, err
+	}
+	if raw, exists := routing["balancers"]; exists {
+		entries, err := readArray(raw, "server routing.balancers")
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range entries {
+			balancer, err := readObject(raw, "server balancer")
+			if err != nil {
+				return nil, err
+			}
+			selectors, err := nonEmptyStrings(balancer["selector"], "server balancer.selector")
+			if err != nil {
+				return nil, err
+			}
+			for _, prefix := range selectors {
+				for _, pair := range loopPairs {
+					if strings.HasPrefix("ai-guard-loop-"+pair[0], prefix) {
+						return nil, fmt.Errorf("ai66-v1 balancer would acquire a server loopback")
+					}
+				}
+				if strings.HasPrefix("ai66-dns-out", prefix) {
+					return nil, fmt.Errorf("ai66-v1 balancer would acquire the server DNS helper")
+				}
+			}
+		}
 	}
 	guards := []any{
 		map[string]any{"type": "field", "ruleTag": "ai66-fake-protocol-block", "protocol": []string{"fakedns"}, "outboundTag": "block"},
