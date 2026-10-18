@@ -1,0 +1,445 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "address": "fakedns",
+        "domains": [
+          "domain:ai.example.invalid"
+        ],
+        "skipFallback": true
+      },
+      "1.1.1.1"
+    ],
+    "enableParallelQuery": false
+  },
+  "fakedns": {
+    "ipPool": "198.19.0.0/16",
+    "poolSize": 4096
+  },
+  "inbounds": [
+    {
+      "tag": "http-route",
+      "protocol": "http",
+      "port": 10800,
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "socks-general",
+      "protocol": "socks",
+      "port": 10801,
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "http-daily",
+      "protocol": "http",
+      "port": 10802,
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "socks-daily",
+      "protocol": "socks",
+      "port": 10803,
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "http-usa-ai",
+      "protocol": "http",
+      "port": 10804,
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "socks-usa-ai",
+      "protocol": "socks",
+      "port": 10805,
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "socks-route",
+      "protocol": "socks",
+      "port": 10866,
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "metadataOnly": true,
+        "destOverride": [
+          "fakedns"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "private-server",
+      "protocol": "vless",
+      "streamSettings": {
+        "realitySettings": {
+          "privateKey": "SYNTHETIC-SERVER-ONLY-KEY"
+        }
+      }
+    },
+    {
+      "tag": "ai66-dns-in",
+      "listen": "0.0.0.0",
+      "port": 1053,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 53,
+        "network": "tcp,udp"
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ruleTag": "ai66-dns-intercept",
+        "inboundTag": [
+          "ai66-dns-in"
+        ],
+        "outboundTag": "ai66-dns-out"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:category-ads-all"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "domain:ai.example.invalid"
+        ],
+        "outboundTag": "usa-ai"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-fake-protocol-block",
+        "protocol": [
+          "fakedns"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-fake-ip-block",
+        "ip": [
+          "198.19.0.0/16"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-second-pass-socks-route",
+        "inboundTag": [
+          "socks-route"
+        ],
+        "outboundTag": "ai-guard-loop-socks-route"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-second-pass-socks-daily",
+        "inboundTag": [
+          "socks-daily"
+        ],
+        "outboundTag": "ai-guard-loop-socks-daily"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-second-pass-socks-general",
+        "inboundTag": [
+          "socks-general"
+        ],
+        "outboundTag": "ai-guard-loop-socks-general"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-second-pass-tunIn",
+        "inboundTag": [
+          "tunIn"
+        ],
+        "outboundTag": "ai-guard-loop-tunIn"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-local-ip",
+        "inboundTag": [
+          "http-daily",
+          "socks-daily",
+          "ai-guard-second-daily",
+          "http-usa-ai",
+          "socks-usa-ai"
+        ],
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-local-domain",
+        "inboundTag": [
+          "http-daily",
+          "socks-daily",
+          "ai-guard-second-daily",
+          "http-usa-ai",
+          "socks-usa-ai"
+        ],
+        "domain": [
+          "full:router.synthetic.invalid",
+          "full:media.synthetic.invalid"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-force-us",
+        "inboundTag": [
+          "http-usa-ai",
+          "socks-usa-ai"
+        ],
+        "outboundTag": "usa-ai"
+      },
+      {
+        "type": "field",
+        "ruleTag": "ai66-force-daily",
+        "inboundTag": [
+          "http-daily",
+          "socks-daily",
+          "ai-guard-second-daily"
+        ],
+        "outboundTag": "daily-overseas"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "domain:cn.example.invalid"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:!cn"
+        ],
+        "outboundTag": "daily-overseas"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {}
+    },
+    {
+      "tag": "usa-ai",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "192.0.2.10",
+            "port": 1080,
+            "users": [
+              {
+                "user": "test",
+                "pass": "SYNTHETIC-CLIENT-NODE-CREDENTIAL"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "sockopt": {
+          "dialerProxy": "hop"
+        }
+      }
+    },
+    {
+      "tag": "hop",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "192.0.2.11",
+            "port": 1080
+          }
+        ]
+      }
+    },
+    {
+      "tag": "daily-overseas",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "192.0.2.12",
+            "port": 1080
+          }
+        ]
+      }
+    },
+    {
+      "tag": "ai-guard-loop-socks-route",
+      "protocol": "loopback",
+      "settings": {
+        "inboundTag": "ai-guard-second-route",
+        "sniffing": {
+          "enabled": true,
+          "metadataOnly": false,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ],
+          "routeOnly": true
+        }
+      }
+    },
+    {
+      "tag": "ai-guard-loop-socks-daily",
+      "protocol": "loopback",
+      "settings": {
+        "inboundTag": "ai-guard-second-daily",
+        "sniffing": {
+          "enabled": true,
+          "metadataOnly": false,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ],
+          "routeOnly": true
+        }
+      }
+    },
+    {
+      "tag": "ai-guard-loop-socks-general",
+      "protocol": "loopback",
+      "settings": {
+        "inboundTag": "ai-guard-second-general",
+        "sniffing": {
+          "enabled": true,
+          "metadataOnly": false,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ],
+          "routeOnly": true
+        }
+      }
+    },
+    {
+      "tag": "ai-guard-loop-tunIn",
+      "protocol": "loopback",
+      "settings": {
+        "inboundTag": "ai-guard-second-tun",
+        "sniffing": {
+          "enabled": true,
+          "metadataOnly": false,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ],
+          "routeOnly": true
+        }
+      }
+    },
+    {
+      "tag": "ai66-dns-out",
+      "protocol": "dns",
+      "settings": {
+        "rules": [
+          {
+            "qType": "1",
+            "action": "hijack"
+          },
+          {
+            "action": "return",
+            "rCode": 0
+          }
+        ]
+      }
+    }
+  ]
+}

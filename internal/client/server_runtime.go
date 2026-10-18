@@ -15,6 +15,12 @@ import (
 // The syncer's baseline hash and native server verifier still use the full,
 // unmodified server snapshot. This is never an automatic loopback allowance.
 func normalizeServerRuntime(baseline []byte, overlay Overlay) ([]byte, error) {
+	if overlay.ServerRuntimeProfile == "ai66-v2" {
+		return normalizeServerRuntimeV2(baseline, overlay)
+	}
+	if len(overlay.ServerLocalDomains) != 0 {
+		return nil, fmt.Errorf("server_local_domains requires ai66-v2")
+	}
 	if overlay.ServerRuntimeProfile == "" {
 		return baseline, nil
 	}

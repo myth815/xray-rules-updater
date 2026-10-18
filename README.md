@@ -351,6 +351,46 @@ acquire the server-owned helpers. These checks prevent a future baseline edit
 from silently changing DNS-dependent ordinary routing through the server's
 second pass.
 
+`client.server_runtime_profile: "ai66-v2"` is a separate, explicit contract for
+the `daily-overseas` role and the revised HTTP/SOCKS ports. It retains v1 support
+for existing installations and rollback. The v2 server has four metadata-first
+paths (`socks-route`, `socks-daily`, `socks-general`, and `tunIn`), each with an
+exact loopback helper. The six public HTTP/SOCKS listeners use ports 10800–10805;
+the internal `socks-route` listener uses 10866. Listener source access still
+belongs to the host firewall; this adapter is not an access-control mechanism.
+
+V2 verifies an ordered server prefix: DNS interception, the existing ad rule,
+the native AI domain rule, FakeDNS rejection guards, four second-pass dispatches,
+two local-only exceptions for the forced listeners, and the explicit US/daily
+dispatches. The local exceptions and forced dispatches must occur after AI and
+FakeDNS guards and cannot acquire the ordinary TUN/general listeners. The
+verified platform rules are removed; the ad rule, AI rule and ordinary routing
+tail are retained. An altered helper, port, predicate, order or platform tag
+fails generation rather than being silently dropped.
+
+V2 also requires `client.server_local_domains`, an explicit nonempty list of
+unique `full:` DNS names (ASCII labels, including IDNA A-labels; no IP literals,
+wildcards or suffix matchers). For example:
+
+```json
+{
+  "server_runtime_profile": "ai66-v2",
+  "server_local_domains": [
+    "full:router.example.invalid",
+    "full:media.example.invalid"
+  ]
+}
+```
+
+The server's local-domain exception must match this list exactly, including
+order. This list authorizes only removal of that server-specific rule; it does
+not add client direct routes or inherit home-access exceptions. Client home
+routes continue to come from the explicit `prepend_rules` overlay. V2 does not
+enable balancing or client FakeDNS. Those require separate supported platform
+adaptation. Removing the server ad rule is also a separate migration: the v2
+prefix requires it, while `drop_legacy_ad_rule` may still remove it from the
+generated client after server normalization.
+
 `client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
 when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).
 Merge it into the existing overlay and replace the synthetic outbound and DNS

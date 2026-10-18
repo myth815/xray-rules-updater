@@ -84,7 +84,7 @@ func TestServerRuntimeProducesSameClientPolicyAndNodes(t *testing.T) {
 }
 
 func TestServerRuntimeRequiresExplicitOptInAndDNS(t *testing.T) {
-	for _, profile := range []string{"", "ai66-v2", " ai66-v1"} {
+	for _, profile := range []string{"", "ai66-v3", " ai66-v1"} {
 		o := runtimeOverlay(t)
 		o.ServerRuntimeProfile = profile
 		if _, err := Generate(runtimeFixture(t), o, ""); err == nil {
