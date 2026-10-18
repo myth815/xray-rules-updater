@@ -159,7 +159,16 @@ func TestServerRuntimeV3RequiresExplicitProfileAndOrdinaryClient(t *testing.T) {
 }
 
 func TestServerRuntimeV3RejectsIneffectiveSelectors(t *testing.T) {
-	for _, fields := range []string{`{}`, `{"domain":[]}`, `{"domain":null}`, `{"domain":""}`, `{"ip":[]}`, `{"ip":null}`, `{"domain":[],"ip":null}`, `{"unknown":["x"]}`, `{"source":["192.0.2.1"],"sourceIP":[]}`} {
+	for _, fields := range []string{
+		`{}`, `{"domain":[]}`, `{"domain":null}`, `{"domain":""}`,
+		`{"domain":[""]}`, `{"domain":[" "]}`, `{"domain":["\t"]}`,
+		`{"domain":["domain:example.invalid",""]}`,
+		`{"domain":[""],"inboundTag":["dns-ai"]}`,
+		`{"domain":["domain:example.invalid"],"domains":[]}`,
+		`{"ip":[]}`, `{"ip":null}`, `{"ip":[""]}`, `{"protocol":[" "]}`,
+		`{"domain":[],"ip":null}`, `{"unknown":["x"]}`,
+		`{"source":["192.0.2.1"],"sourceIP":[]}`,
+	} {
 		t.Run(fields, func(t *testing.T) {
 			var rule map[string]any
 			if err := json.Unmarshal([]byte(fields), &rule); err != nil {

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strings"
 )
 
 // v3 owns only the late domain-resolution lane in addition to the exact v2
@@ -191,7 +192,13 @@ func validateRuntimeV3DNSBootstrap(raw json.RawMessage) error {
 // network-only or port-only rule is not an acceptable late-resolution bypass.
 // Invalid nonempty selector values still face the ordinary schema validator.
 func runtimeV3EffectiveSelector(rule object) bool {
+	effective := false
 	for _, key := range []string{"domain", "domains", "ip", "sourceIP", "source", "localIP", "inboundTag", "protocol", "user", "process", "localOS"} {
+		if key == "domain" {
+			if raw, ok := rule["domains"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				continue
+			}
+		}
 		if key == "source" {
 			if raw, ok := rule["sourceIP"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 				continue
@@ -203,7 +210,16 @@ func runtimeV3EffectiveSelector(rule object) bool {
 		}
 		var values []json.RawMessage
 		if json.Unmarshal(raw, &values) == nil && len(values) > 0 {
-			return true
+			// An empty substring matches every domain in Xray. Check every
+			// element, not just array length: even one empty element broadens
+			// an otherwise nonempty domain list into a catchall.
+			for _, value := range values {
+				var text string
+				if json.Unmarshal(value, &text) != nil || strings.TrimSpace(text) == "" {
+					return false
+				}
+			}
+			effective = true
 		}
 	}
 	if raw, ok := rule["attrs"]; ok {
@@ -212,7 +228,7 @@ func runtimeV3EffectiveSelector(rule object) bool {
 			return true
 		}
 	}
-	return false
+	return effective
 }
 
 func serverRuntimeV3IPDefault() map[string]any {
