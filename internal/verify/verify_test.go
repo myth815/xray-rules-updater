@@ -103,6 +103,85 @@ func TestLoadConfigRejectsUnsafeOrTrailing(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestLoadConfigSelectsExactlyOneNativeBaseline(t *testing.T) {
+	c := Config{PublishDir: "/publish", XrayBinary: "/native/xray", XrayConfigFile: "/native/config.json", MosDNSBinary: "/native/mosdns", MosDNSConfigDir: "/native/mosdns-config"}
+	b, _ := json.Marshal(c)
+	if _, err := LoadConfig(b); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.XrayConfigFile = "" },
+		func(c *Config) { c.XrayConfigDir = "/native/modules" },
+		func(c *Config) { c.XrayConfigFile = "relative.json" },
+		func(c *Config) { c.XrayConfigFile = "/native/../config.json" },
+	} {
+		bad := c
+		mutate(&bad)
+		b, _ := json.Marshal(bad)
+		if _, err := LoadConfig(b); err == nil {
+			t.Fatalf("unsafe or ambiguous native input accepted: %+v", bad)
+		}
+	}
+}
+
+func TestNativeSingleFileReceivesExactPublishedBaseline(t *testing.T) {
+	root := publication(t)
+	native := t.TempDir()
+	x := filepath.Join(native, "xray")
+	input, captured := filepath.Join(native, "config.json"), filepath.Join(native, "captured.json")
+	body := []byte("\n {\"outbounds\":[],\"env\":{\"xray.cone.disabled\":\"true\"},\"inbounds\":[{\"tag\":\"tunIn\",\"protocol\":\"tun\"}]}\n")
+	if err := os.WriteFile(input, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "versions", "test-v1", "manifest.json")
+	manifestBody, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value manifest
+	if err := json.Unmarshal(manifestBody, &value); err != nil {
+		t.Fatal(err)
+	}
+	value.BaselineSHA256 = sumHex(body)
+	manifestBody, _ = json.Marshal(value)
+	if err := os.WriteFile(manifestPath, manifestBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Stop at the native validation phase after capturing its actual config.
+	// The candidate contains the gateway env and TUN fields omitted by the old
+	// module snapshot, so dropping those before validation would fail this test.
+	script := "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = -test ] && [ \"$3\" = -config ] || exit 8\ncat \"$4\" > '" + captured + "'\nexit 7\n"
+	if err := os.WriteFile(x, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := Config{PublishDir: root, XrayBinary: x, XrayConfigFile: input, MosDNSBinary: "/bin/sh", MosDNSConfigDir: native, TimeoutSeconds: 2}
+	s, err := Run(context.Background(), c)
+	if err == nil || s.ErrorCode != "verify_xray" || s.BaselineSHA256 != sumHex(body) {
+		t.Fatalf("single-file native invocation failed: %+v %v", s, err)
+	}
+	got, err := os.ReadFile(captured)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("native input differs from the published baseline: %v", err)
+	}
+	if err := os.WriteFile(input, append(body, ' '), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Run(context.Background(), c)
+	if err == nil || s.ErrorCode != "verify_baseline_changed" {
+		t.Fatalf("changed single-file baseline accepted: %+v %v", s, err)
+	}
+	if err := os.Remove(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(captured, input); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Run(context.Background(), c)
+	if err == nil || s.ErrorCode != "verify_baseline_changed" {
+		t.Fatalf("symlink single-file baseline accepted: %+v %v", s, err)
+	}
+}
 func TestCloneMosDNSRewritesOnlyTemporaryCopy(t *testing.T) {
 	source := t.TempDir()
 	os.Mkdir(filepath.Join(source, "rule"), 0700)

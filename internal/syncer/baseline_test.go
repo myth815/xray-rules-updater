@@ -1,12 +1,69 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
+
+func TestSingleBaselinePreservesExactBytesAndPublicationHash(t *testing.T) {
+	c := fixture(t)
+	body, err := os.ReadFile(c.Baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(append([]byte("\n \t"), body...), '\n')
+	if err := os.WriteFile(c.Baseline, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := SnapshotBaselineFile(c.Baseline)
+	if err != nil || !bytes.Equal(snapshot, body) {
+		t.Fatalf("single-file bytes changed: %v", err)
+	}
+	summary, err := Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(c.PublishDir, "versions", summary.Version, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value struct {
+		BaselineSHA256 string `json:"baseline_sha256"`
+	}
+	if json.Unmarshal(manifest, &value) != nil || value.BaselineSHA256 != hash(body) {
+		t.Fatal("publication does not bind the exact authoritative file")
+	}
+}
+
+func TestSingleBaselineRejectsUnsafeFiles(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "config.json")
+	if err := os.WriteFile(file, []byte(`{"outbounds":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "linked.json")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(root, "fifo")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	large := filepath.Join(root, "large.json")
+	if err := os.WriteFile(large, bytes.Repeat([]byte{' '}, baselineLimit+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{link, fifo, large, root, filepath.Join(root, "missing.json")} {
+		if _, err := SnapshotBaselineFile(path); err == nil {
+			t.Fatalf("accepted unsafe baseline: %s", path)
+		}
+	}
+}
 
 func TestRunPublishesAndRechecksDirectoryBaseline(t *testing.T) {
 	c := fixture(t)

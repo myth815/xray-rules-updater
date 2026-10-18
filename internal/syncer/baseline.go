@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,12 +20,59 @@ func SnapshotBaselineDirectory(dir string) ([]byte, error) {
 	return readBaseline(Config{BaselineDirectory: dir})
 }
 
+// SnapshotBaselineFile retains the authoritative file's exact bytes. Generation
+// and native verification share this reader so the manifest hash identifies the
+// same complete configuration that is passed to the target Core.
+func SnapshotBaselineFile(path string) ([]byte, error) {
+	first, firstInfo, err := readBaselineFile(path)
+	if err != nil {
+		return nil, err
+	}
+	second, secondInfo, err := readBaselineFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(firstInfo, secondInfo) || firstInfo.Size() != secondInfo.Size() ||
+		!firstInfo.ModTime().Equal(secondInfo.ModTime()) || !bytes.Equal(first, second) {
+		return nil, errors.New("baseline file changed during snapshot")
+	}
+	return first, nil
+}
+
+func readBaselineFile(path string) ([]byte, os.FileInfo, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, errors.New("baseline file open failed")
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Size() > baselineLimit {
+		return nil, nil, errors.New("invalid baseline file or size")
+	}
+	body, err := io.ReadAll(io.LimitReader(f, baselineLimit+1))
+	if err != nil || len(body) > baselineLimit {
+		return nil, nil, errors.New("baseline file read failed or size exceeded")
+	}
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() ||
+		!before.ModTime().Equal(after.ModTime()) || int64(len(body)) != after.Size() {
+		return nil, nil, errors.New("baseline file changed during read")
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !current.Mode().IsRegular() || !os.SameFile(after, current) ||
+		after.Size() != current.Size() || !after.ModTime().Equal(current.ModTime()) {
+		return nil, nil, errors.New("baseline file replaced during read")
+	}
+	return body, current, nil
+}
+
 // readBaseline supports the conventional one-top-level-module-per-file layout.
 // It deliberately rejects duplicate modules instead of guessing Xray's merge
 // semantics. Two identical reads detect edits during snapshot construction.
 func readBaseline(c Config) ([]byte, error) {
 	if c.BaselineDirectory == "" {
-		return readLimited(c.Baseline, baselineLimit)
+		return SnapshotBaselineFile(c.Baseline)
 	}
 	first, err := readModules(c.BaselineDirectory)
 	if err != nil {

@@ -25,7 +25,8 @@ import (
 type Config struct {
 	PublishDir      string `json:"publish_dir"`
 	XrayBinary      string `json:"xray_binary"`
-	XrayConfigDir   string `json:"xray_config_dir"`
+	XrayConfigDir   string `json:"xray_config_dir,omitempty"`
+	XrayConfigFile  string `json:"xray_config_file,omitempty"`
 	MosDNSBinary    string `json:"mosdns_binary"`
 	MosDNSConfigDir string `json:"mosdns_config_dir"`
 	DiagnosticDir   string `json:"diagnostic_dir,omitempty"`
@@ -74,7 +75,16 @@ func (c *Config) validate() error {
 	if c.TimeoutSeconds < 1 || c.TimeoutSeconds > 90 {
 		return failure("verify_config")
 	}
-	for _, p := range []string{c.PublishDir, c.XrayBinary, c.XrayConfigDir, c.MosDNSBinary, c.MosDNSConfigDir} {
+	if (c.XrayConfigDir == "") == (c.XrayConfigFile == "") {
+		return failure("verify_config")
+	}
+	paths := []string{c.PublishDir, c.XrayBinary, c.MosDNSBinary, c.MosDNSConfigDir}
+	if c.XrayConfigFile != "" {
+		paths = append(paths, c.XrayConfigFile)
+	} else {
+		paths = append(paths, c.XrayConfigDir)
+	}
+	for _, p := range paths {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 			return failure("verify_config")
 		}
@@ -182,14 +192,18 @@ func Run(parent context.Context, c Config) (s Summary, err error) {
 			return s, failure("verify_binary")
 		}
 	}
-	for _, dir := range []string{c.XrayConfigDir, c.MosDNSConfigDir} {
+	configDirs := []string{c.MosDNSConfigDir}
+	if c.XrayConfigDir != "" {
+		configDirs = append(configDirs, c.XrayConfigDir)
+	}
+	for _, dir := range configDirs {
 		st, e := os.Lstat(dir)
 		if e != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
 			return s, failure("verify_native_config")
 		}
 	}
 	setPhase("baseline_snapshot")
-	baseline, e := syncer.SnapshotBaselineDirectory(c.XrayConfigDir)
+	baseline, e := c.snapshotBaseline()
 	if e != nil || sumHex(baseline) != manifest.BaselineSHA256 {
 		return s, failure("verify_baseline_changed")
 	}
@@ -268,13 +282,20 @@ func Run(parent context.Context, c Config) (s Summary, err error) {
 	default:
 	}
 	setPhase("baseline_recheck")
-	baselineAfter, e := syncer.SnapshotBaselineDirectory(c.XrayConfigDir)
+	baselineAfter, e := c.snapshotBaseline()
 	if e != nil || sumHex(baselineAfter) != manifest.BaselineSHA256 {
 		return s, failure("verify_baseline_changed")
 	}
 	s.Status = "verified"
 	setPhase("complete")
 	return s, nil
+}
+
+func (c Config) snapshotBaseline() ([]byte, error) {
+	if c.XrayConfigFile != "" {
+		return syncer.SnapshotBaselineFile(c.XrayConfigFile)
+	}
+	return syncer.SnapshotBaselineDirectory(c.XrayConfigDir)
 }
 
 func writeSummary(root, id, name string, data []byte) error {

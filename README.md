@@ -110,6 +110,14 @@ one-module-per-file layout; it does not reproduce arbitrary Xray `confdir` merge
 semantics or make concurrent multi-file edits transactional. Mount it read-only
 and complete coherent baseline edits before scheduling generation.
 
+A single `baseline` file is the preferred maintenance format. Its bytes are
+preserved exactly for the publication hash and the native validator. The reader
+requires a regular file, rejects a final-path symlink, takes two identical reads,
+and checks file identity, size and modification time across the snapshot. Publish
+coherent edits by replacing the complete file atomically; a detected edit during
+generation rejects the candidate. Point native verification's `xray_config_file`
+at this same full file, including all server-owned runtime fields.
+
 ```sh
 docker run --rm --memory=192m --cpus=1 \
   -v "$PWD/config:/config:ro" \
@@ -422,6 +430,18 @@ their reserved tags, an earlier unconditional rule, or a changed tail are
 rejected rather than silently adapted. Validate both the server and generated
 client with their target Core before publishing.
 
+`client.server_runtime_profile: "ai66-v4"` accepts the complete single-file
+RouterOS runtime instead of a module snapshot that excludes the gateway
+overlay. It requires exactly the quiet gateway log configuration, the string
+environment value `"xray.cone.disabled": "true"`, and one `tunIn` listener using
+`xray0`, MTU 1500, user level 0 and metadata-only FakeDNS sniffing. These exact
+server-only fields are removed only from the client projection; the full input
+still determines the publication hash and native server validation. Everything
+remaining is checked by the unchanged v3 contract and yields the same client
+policy and node graph. Unknown environment keys, altered TUN/log settings,
+duplicate listeners or incomplete single-file inputs are rejected. V1–v3 keep
+their existing behavior. This adds no Core or OneXray App fork.
+
 `client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
 when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).
 Merge it into the existing overlay and replace the synthetic outbound and DNS
@@ -537,13 +557,20 @@ xray-rules-updater -health-config /config/health.json
   responses do not prove the running consumers loaded particular GEO hashes.
 
 Verification configuration supplies absolute `publish_dir`, `xray_binary`,
-`xray_config_dir`, `mosdns_binary`, `mosdns_config_dir` paths and an optional
+`mosdns_binary`, `mosdns_config_dir` paths and exactly one of `xray_config_file`
+(complete single JSON) or `xray_config_dir` (legacy disjoint modules), plus an optional
 `timeout_seconds` (default 60, maximum 90). Native binaries are supplied as
 read-only mounts and are not bundled into this image. Use a separate container
 network namespace: temporary MosDNS binds its own DNS port and queries its
 configured upstreams. It needs a private writable `/tmp`; bounded native logs
 are deleted at completion. Baseline drift before or after verification rejects
 the result. This is not a OneXray import, client VPN or traffic-policy test.
+
+For example, the publisher's `"baseline": "/live/xray/config.json"` pairs with
+the verifier's `"xray_config_file": "/live/xray/config.json"`. Do not retain an
+old `xray_config_dir` beside the new field, and do not keep a runtime-only overlay
+outside the file being published and verified. Both generation and verification
+use the same snapshot reader; native validation receives those exact bytes.
 
 Health configuration supplies `publish_dir`, `dns_server`, `proxy_url` and an
 optional `timeout_seconds` (default and maximum 30). DNS requires an IP address,

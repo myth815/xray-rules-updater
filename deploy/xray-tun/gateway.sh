@@ -52,19 +52,19 @@ echo 0 > /proc/sys/net/ipv4/ip_forward
 ' || die 'gateway address drift'
 [ -f "$XRAY_LOCATION_ASSET/geoip.dat" ] && [ -f "$XRAY_LOCATION_ASSET/geosite.dat" ] || die 'native GEO assets absent'
 
-# Keep original modules in their lexical order, then append only the native
-# listener and logging overlay. -confdir would append modules after -config
-# and could silently override the final overlay.
-set -- /usr/local/bin/xray run
-count=0
+# This is the sole runtime input and the updater's baseline/verification input.
+# Reject stale split modules or an environment-appended configuration directory.
+config=/etc/xray/config.json
+[ -f "$config" ] && [ ! -L "$config" ] || die 'single regular configuration required'
 for file in /etc/xray/*.json; do
-    [ -f "$file" ] && [ ! -L "$file" ] || die 'regular configuration modules required'
-    set -- "$@" -config "$file"
-    count=$((count+1))
+    [ "$file" = "$config" ] || die 'legacy configuration modules present'
 done
-[ "$count" -gt 0 ] || die 'configuration modules absent'
-set -- "$@" -config /gateway/native.json
+[ ! -e /gateway/native.json ] || die 'legacy native overlay present'
+[ -z "$(env | awk -F= '$1=="XRAY_LOCATION_CONFDIR" || $1=="xray.location.confdir" {print $0}')" ] || die 'configuration directory override is not allowed'
+set -- /usr/local/bin/xray run -config "$config"
+config_digest=$(sha256sum "$config")
 /bin/busybox timeout -s TERM -k 1 15 "$@" -test >/dev/null
+[ "$(sha256sum "$config")" = "$config_digest" ] || die 'configuration changed during validation'
 
 for file in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$file"; done
 if /bin/ip rule show | awk '$1=="2000:" {found=1} END {exit !found}'; then

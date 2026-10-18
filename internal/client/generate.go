@@ -31,7 +31,7 @@ type Overlay struct {
 	DNSServersFromOutbounds  map[string]string   `json:"dns_servers_from_outbounds,omitempty"`
 	OneXrayFakeDNS           *OneXrayFakeDNS     `json:"one_xray_fake_dns,omitempty"`
 	ServerRuntimeProfile     string              `json:"server_runtime_profile,omitempty"`
-	// ServerLocalDomains belongs to the ai66-v2 server adapter only. These
+	// ServerLocalDomains belongs to the ai66-v2/v3/v4 server adapters. These
 	// explicit exact-match exceptions are never copied into client policy.
 	ServerLocalDomains []string `json:"server_local_domains,omitempty"`
 }
