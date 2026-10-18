@@ -327,6 +327,19 @@ domain copies have an additional aggregate 4 MiB limit.
 
 ### Optional OneXray FakeDNS adaptation
 
+For a baseline using the router-owned AI66 runtime, opt in with
+`client.server_runtime_profile: "ai66-v1"` and supply an explicit `client.dns`.
+This profile recognizes only the exact AI-only `198.19.0.0/16` pool (4096
+mappings), dedicated DNS listener, first-pass SOCKS metadata sniffing, three
+loopback helpers and ordered block/dispatch guards defined in
+[`internal/client/server_runtime.go`](internal/client/server_runtime.go).
+It removes those server runtime details before ordinary client adaptation,
+preserving the baseline's node identities, dependency graph and business rules.
+Changed or missing helpers, broader FakeDNS ownership and unknown profiles
+fail generation. The full original baseline still determines publication
+identity and native server verification. This does not deploy a router runtime
+or enable client FakeDNS; enable and validate each platform separately.
+
 `client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
 when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).
 Merge it into the existing overlay and replace the synthetic outbound and DNS

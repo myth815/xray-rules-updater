@@ -30,6 +30,7 @@ type Overlay struct {
 	DNS                      json.RawMessage     `json:"dns"`
 	DNSServersFromOutbounds  map[string]string   `json:"dns_servers_from_outbounds,omitempty"`
 	OneXrayFakeDNS           *OneXrayFakeDNS     `json:"one_xray_fake_dns,omitempty"`
+	ServerRuntimeProfile     string              `json:"server_runtime_profile,omitempty"`
 }
 
 type object map[string]json.RawMessage
@@ -52,6 +53,11 @@ type balancer struct {
 // the candidate must still pass the target core's configuration validation.
 func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) {
 	_ = version // Versioning is carried by the manifest and immutable URL.
+	var err error
+	baseline, err = normalizeServerRuntime(baseline, overlay)
+	if err != nil {
+		return nil, fmt.Errorf("server runtime adaptation: %w", err)
+	}
 	top, err := readObject(baseline, "baseline")
 	if err != nil {
 		return nil, err
