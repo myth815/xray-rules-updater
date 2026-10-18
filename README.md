@@ -391,6 +391,37 @@ adaptation. Removing the server ad rule is also a separate migration: the v2
 prefix requires it, while `drop_legacy_ad_rule` may still remove it from the
 generated client after server normalization.
 
+`client.server_runtime_profile: "ai66-v3"` adds an explicit late DNS-resolution
+lane to the v2 contract. It is intended for a server whose existing second-pass
+loopbacks suppress routing-time DNS lookups. Known domain policies, IP rules,
+and forced listeners retain their earlier priority. The final IP-only direct
+rule handles already-resolved destinations; the final resolver rule handles
+only the remaining domain destinations.
+
+V3 recognizes two exact server-only helpers: `policy-resolve-unknown` resolves
+through `sockopt.domainStrategy: "ForceIPv4"` and forwards through
+`dialerProxy: "policy-reclassify-resolved"`; that loopback re-enters routing as
+`policy-resolved` without further sniffing. The DNS lookup precedes the proxy
+handoff, and a failed forced lookup closes the connection. This requires no
+additional listener, container, or Core patch. It is an IPv4 resolution policy;
+it is not a general IPv6 migration.
+Server DNS bootstrap addresses must be literal IP addresses (apart from the
+owned FakeDNS server), avoiding a resolver name that depends on this same lane.
+
+The adapter validates and removes these exact helpers and the final resolver
+rule. The native client retains `IPIfNonMatch` and the IP-only direct rule, so a
+fresh client routing context can resolve otherwise-unclassified domains itself.
+V3 places the verified unchained `block` outbound first in the generated client:
+successful IP routing still selects its explicit rule, while an unresolved
+destination cannot fall back to a default direct connection. An explicit
+`keep_outbounds` list must retain `block`. The server's outbound order is not
+changed by this client adaptation.
+V1 and v2 behavior is unchanged. V3 does not support combining this profile with
+the separate `one_xray_fake_dns` adapter. Altered helpers, extra references to
+their reserved tags, an earlier unconditional rule, or a changed tail are
+rejected rather than silently adapted. Validate both the server and generated
+client with their target Core before publishing.
+
 `client.one_xray_fake_dns` is an explicit OneXray platform adapter, disabled
 when omitted. See [the credential-free fragment](examples/one-xray-fake-dns-fragment.json).
 Merge it into the existing overlay and replace the synthetic outbound and DNS
