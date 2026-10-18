@@ -60,7 +60,7 @@ for file in /etc/xray/*.json; do
     [ "$file" = "$config" ] || die 'legacy configuration modules present'
 done
 [ ! -e /gateway/native.json ] || die 'legacy native overlay present'
-[ -z "$(env | awk -F= '$1=="XRAY_LOCATION_CONFDIR" || $1=="xray.location.confdir" {print $0}')" ] || die 'configuration directory override is not allowed'
+[ -z "$(/bin/busybox env | awk -F= '$1=="XRAY_LOCATION_CONFDIR" || $1=="xray.location.confdir" {print $0}')" ] || die 'configuration directory override is not allowed'
 set -- /usr/local/bin/xray run -config "$config"
 config_digest=$(sha256sum "$config")
 /bin/busybox timeout -s TERM -k 1 15 "$@" -test >/dev/null
