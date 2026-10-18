@@ -51,6 +51,7 @@ var token = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var filename = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._!-]{0,127}$`)
 var digest = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 var versionAssetPath = regexp.MustCompile(`/rules/versions/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/`)
+var adsAssetReference = regexp.MustCompile(`[A-Za-z0-9_.-]*geosite_category-ads-all[A-Za-z0-9_.-]*`)
 
 func LoadConfig(data []byte) (Config, error) {
 	var c Config
@@ -240,7 +241,7 @@ func Run(parent context.Context, c Config) (s Summary, err error) {
 	}
 	setPhase("mosdns_prepare")
 	mosdir := filepath.Join(tmp, "mosdns")
-	if e = cloneMosDNS(c.MosDNSConfigDir, mosdir, current); e != nil {
+	if e = cloneMosDNSWithAds(c.MosDNSConfigDir, mosdir, current, manifest); e != nil {
 		return s, e
 	}
 	mosdnsLog = filepath.Join(tmp, "mosdns.log")
@@ -414,6 +415,18 @@ func readFile(path string, limit int64) ([]byte, error) {
 	return b, nil
 }
 func cloneMosDNS(source, dest, assets string) error {
+	return cloneMosDNSWithAds(source, dest, assets, nil)
+}
+
+// The publisher's explicit category export is the only opt-in. Run supplies
+// this manifest only after snapshot verified every file hash; no separate
+// configuration switch can authorize an absent asset or the obsolete name.
+func cloneMosDNSWithAds(source, dest, assets string, publication *manifest) error {
+	allowAds := false
+	if publication != nil {
+		asset, found := publication.Files["geosite_category-ads-all.txt"]
+		allowAds = found && asset.Bytes > 0
+	}
 	if e := os.MkdirAll(filepath.Join(dest, "rule"), 0700); e != nil {
 		return failure("verify_temp")
 	}
@@ -422,8 +435,13 @@ func cloneMosDNS(source, dest, assets string) error {
 		if e != nil {
 			return failure("verify_mosdns_config")
 		}
-		if bytes.Contains(b, []byte("geosite_ads")) || bytes.Contains(b, []byte("geosite_category-ads-all")) {
+		if bytes.Contains(b, []byte("geosite_ads")) {
 			return failure("verify_mosdns_ads_reference")
+		}
+		for _, reference := range adsAssetReference.FindAll(b, -1) {
+			if !allowAds || string(reference) != "geosite_category-ads-all.txt" {
+				return failure("verify_mosdns_ads_reference")
+			}
 		}
 		b = bytes.ReplaceAll(b, []byte("/etc/mosdns/"), []byte(dest+"/"))
 		b = bytes.ReplaceAll(b, []byte("/var/mosdns/"), []byte(assets+"/"))

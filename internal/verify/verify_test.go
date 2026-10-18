@@ -360,3 +360,84 @@ func TestMosDNSAdsReferenceIsNotSilentlyRemoved(t *testing.T) {
 		t.Fatalf("ads accepted: %v", e)
 	}
 }
+
+func TestMosDNSAdsRequireExactVerifiedPublicationAsset(t *testing.T) {
+	root := publication(t)
+	versionDir := filepath.Join(root, "versions", "test-v1")
+	manifestPath := filepath.Join(versionDir, "manifest.json")
+	manifestBody, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published manifest
+	if err := json.Unmarshal(manifestBody, &published); err != nil {
+		t.Fatal(err)
+	}
+	asset := []byte("full:ad.example.invalid\n")
+	const name = "geosite_category-ads-all.txt"
+	published.Files[name] = struct {
+		SHA256 string `json:"sha256"`
+		Bytes  int64  `json:"bytes"`
+	}{sumHex(asset), int64(len(asset))}
+	manifestBody, _ = json.Marshal(published)
+	if err := os.WriteFile(manifestPath, manifestBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versionDir, name), asset, 0600); err != nil {
+		t.Fatal(err)
+	}
+	verifiedDir, verified, err := snapshot(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, "rule"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"config.yaml", "dns.yaml", "dat_exec.yaml"} {
+		if err := os.WriteFile(filepath.Join(source, file), []byte("files: /rules/current/"+name+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := filepath.Join(t.TempDir(), "mosdns")
+	if err := cloneMosDNSWithAds(source, dest, verifiedDir, verified); err != nil {
+		t.Fatalf("explicit verified category asset rejected: %v", err)
+	}
+	copy, err := os.ReadFile(filepath.Join(dest, "config.yaml"))
+	if err != nil || !bytes.Contains(copy, []byte(verifiedDir+"/"+name)) {
+		t.Fatalf("allowed asset was not bound to the verified version: %v", err)
+	}
+	if err := cloneMosDNS(source, filepath.Join(t.TempDir(), "default"), verifiedDir); err != failure("verify_mosdns_ads_reference") {
+		t.Fatalf("unverified ads reference accepted: %v", err)
+	}
+	empty := *verified
+	empty.Files = map[string]struct {
+		SHA256 string `json:"sha256"`
+		Bytes  int64  `json:"bytes"`
+	}{name: {SHA256: sumHex(nil), Bytes: 0}}
+	if err := cloneMosDNSWithAds(source, filepath.Join(t.TempDir(), "empty"), verifiedDir, &empty); err != failure("verify_mosdns_ads_reference") {
+		t.Fatalf("empty ads asset accepted: %v", err)
+	}
+	for _, missing := range []*manifest{nil, {Files: map[string]struct {
+		SHA256 string `json:"sha256"`
+		Bytes  int64  `json:"bytes"`
+	}{}}} {
+		if err := cloneMosDNSWithAds(source, filepath.Join(t.TempDir(), "missing"), verifiedDir, missing); err != failure("verify_mosdns_ads_reference") {
+			t.Fatalf("missing manifest asset accepted: %v", err)
+		}
+	}
+	for _, bad := range []string{"geosite_ads.txt", "geosite_category-ads-all", "geosite_category-ads-all.txt.bak", "prefix-geosite_category-ads-all.txt"} {
+		if err := os.WriteFile(filepath.Join(source, "config.yaml"), []byte("files: /rules/current/"+bad+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := cloneMosDNSWithAds(source, filepath.Join(t.TempDir(), "bad"), verifiedDir, verified); err != failure("verify_mosdns_ads_reference") {
+			t.Fatalf("legacy or unverified ads name accepted: %s: %v", bad, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(versionDir, name), []byte("changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := snapshot(context.Background(), root); err != failure("verify_integrity") {
+		t.Fatalf("corrupted opt-in asset passed publication verification: %v", err)
+	}
+}

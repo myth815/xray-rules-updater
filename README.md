@@ -572,6 +572,14 @@ old `xray_config_dir` beside the new field, and do not keep a runtime-only overl
 outside the file being published and verified. Both generation and verification
 use the same snapshot reader; native validation receives those exact bytes.
 
+Native verification permits a MosDNS reference to `geosite_category-ads-all.txt`
+only when the publisher explicitly exports that exact file in the selected
+publication manifest and the nonempty file passes its normal size and SHA256 verification.
+The exported manifest asset is the single opt-in; no separate verifier switch is
+needed. Missing assets and similar filenames fail closed, and the obsolete
+`geosite_ads` reference remains rejected. This validates an existing DNS ad policy
+without adding filtering to MosDNS on its own.
+
 Health configuration supplies `publish_dir`, `dns_server`, `proxy_url` and an
 optional `timeout_seconds` (default and maximum 30). DNS requires an IP address,
 optionally with a port; the proxy must be HTTP/HTTPS without embedded credentials.
