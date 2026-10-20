@@ -27,10 +27,13 @@ type Overlay struct {
 	DropLegacyAdRule         bool                `json:"drop_legacy_ad_rule"`
 	DropInboundRules         bool                `json:"drop_inbound_rules"`
 	PrependRules             []json.RawMessage   `json:"prepend_rules"`
-	DNS                      json.RawMessage     `json:"dns"`
-	DNSServersFromOutbounds  map[string]string   `json:"dns_servers_from_outbounds,omitempty"`
-	OneXrayFakeDNS           *OneXrayFakeDNS     `json:"one_xray_fake_dns,omitempty"`
-	ServerRuntimeProfile     string              `json:"server_runtime_profile,omitempty"`
+	// RoutingDomainStrategy overrides only the generated client's routing
+	// strategy. Empty inherits the authoritative baseline without changes.
+	RoutingDomainStrategy   string            `json:"routing_domain_strategy,omitempty"`
+	DNS                     json.RawMessage   `json:"dns"`
+	DNSServersFromOutbounds map[string]string `json:"dns_servers_from_outbounds,omitempty"`
+	OneXrayFakeDNS          *OneXrayFakeDNS   `json:"one_xray_fake_dns,omitempty"`
+	ServerRuntimeProfile    string            `json:"server_runtime_profile,omitempty"`
 	// ServerLocalDomains belongs to the ai66-v2/v3/v4 server adapters. These
 	// explicit exact-match exceptions are never copied into client policy.
 	ServerLocalDomains []string `json:"server_local_domains,omitempty"`
@@ -56,6 +59,14 @@ type balancer struct {
 // the candidate must still pass the target core's configuration validation.
 func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) {
 	_ = version // Versioning is carried by the manifest and immutable URL.
+	switch overlay.RoutingDomainStrategy {
+	case "", "AsIs", "IPIfNonMatch", "IPOnDemand":
+	default:
+		return nil, fmt.Errorf("routing_domain_strategy: expected AsIs, IPIfNonMatch or IPOnDemand, or empty to inherit")
+	}
+	if overlay.OneXrayFakeDNS != nil && overlay.RoutingDomainStrategy == "IPOnDemand" {
+		return nil, fmt.Errorf("routing_domain_strategy: IPOnDemand is incompatible with the one_xray_fake_dns two-pass adapter")
+	}
 	var err error
 	baseline, err = normalizeServerRuntime(baseline, overlay)
 	if err != nil {
@@ -156,6 +167,12 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 			return nil, err
 		}
 	}
+	if overlay.RoutingDomainStrategy != "" {
+		routing["domainStrategy"], err = json.Marshal(overlay.RoutingDomainStrategy)
+		if err != nil {
+			return nil, fmt.Errorf("encode routing domain strategy: %w", err)
+		}
+	}
 	extraTags := make(map[string]bool, len(overlay.ExtraOutbounds))
 	for _, out := range outs[len(outs)-len(overlay.ExtraOutbounds):] {
 		extraTags[out.tag] = true
@@ -225,7 +242,7 @@ func Generate(baseline []byte, overlay Overlay, version string) ([]byte, error) 
 		}
 		adapted = append(adapted, raw)
 	}
-	if _, hasRouting := top["routing"]; hasRouting || len(overlay.PrependRules) != 0 {
+	if _, hasRouting := top["routing"]; hasRouting || len(overlay.PrependRules) != 0 || overlay.RoutingDomainStrategy != "" {
 		routing["rules"], err = json.Marshal(adapted)
 		if err != nil {
 			return nil, fmt.Errorf("encode routing rules: %w", err)

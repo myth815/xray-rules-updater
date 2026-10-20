@@ -313,6 +313,15 @@ router baseline, set this switch to `false`; otherwise the expected-rule check
 intentionally stops publication. Neither switch changes the default outbound,
 rewrites the catchall nor repairs routing policy automatically.
 
+`client.routing_domain_strategy` optionally changes only the generated client's
+`routing.domainStrategy`. Omit it or use an empty string to inherit unchanged;
+the exact supported values are `AsIs`, `IPIfNonMatch` and `IPOnDemand`. Server
+runtime validation still checks the unmodified authoritative baseline before
+the client override is applied. Rule order, DNS and outbound settings remain
+unchanged, so review the resulting DNS and first-match behavior with the target
+core. `IPOnDemand` cannot be combined with `client.one_xray_fake_dns`, whose
+separate two-pass runtime does not support that lookup strategy.
+
 To derive one declared domain policy for both DNS consumers, optionally set
 `domain_sets_from_outbounds: {"business_remote.txt": "sample-egress"}` and
 `client.dns_servers_from_outbounds: {"dns-business": "sample-egress"}`. The
